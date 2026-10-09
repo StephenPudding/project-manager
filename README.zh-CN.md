@@ -8,7 +8,7 @@ Windows 原生本地项目管理工具。通过缓存预览浏览网页应用、
 
 ## 下载
 
-从 [Releases](https://github.com/StephenPudding/project-manager/releases/latest) 下载 Windows x64 便携 ZIP，**完整解压**后运行 `project-manager.exe`。便携包包含截图运行环境。被管理的项目仍可能需要自行安装对应的包管理器和依赖。当前软件界面为简体中文。
+从 [Releases](https://github.com/StephenPudding/project-manager/releases/latest) 下载 Windows x64 便携 ZIP，**完整解压**后运行 `project-manager.exe`。便携包包含截图运行环境。被管理的项目仍可能需要自行安装对应的包管理器和依赖。界面自动跟随 Windows 显示语言：中文系统使用中文，其他语言使用英文。
 
 ## 构建
 

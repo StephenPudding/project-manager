@@ -55,7 +55,7 @@ impl SmoothScroll {
                         motion.cancel();
                         return;
                     }
-                    let distance = -f32::from(event.delta.pixel_delta(px(20.)).y);
+                    let distance = -f32::from(event.delta.pixel_delta(px(56.)).y);
                     if distance == 0. {
                         return;
                     }

@@ -8,7 +8,7 @@ Built with **Rust + GPUI**, with an on-demand **Node.js / Playwright** worker fo
 
 ## Download
 
-Download the Windows x64 portable ZIP from [Releases](https://github.com/StephenPudding/project-manager/releases/latest), extract the **entire archive**, and open `project-manager.exe`. The portable package includes the capture runtime. Individual managed projects may still need their own package managers and dependencies. The current UI is in Simplified Chinese.
+Download the Windows x64 portable ZIP from [Releases](https://github.com/StephenPudding/project-manager/releases/latest), extract the **entire archive**, and open `project-manager.exe`. The portable package includes the capture runtime. Individual managed projects may still need their own package managers and dependencies. The interface follows your Windows display language: Chinese for Chinese systems, English otherwise.
 
 ## Build
 

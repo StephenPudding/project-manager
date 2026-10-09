@@ -449,7 +449,7 @@ mod windows {
                 .as_deref()
                 .and_then(|path| Path::new(path).file_name())
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| format!("{kind} 服务"));
+                .unwrap_or_else(|| format!("{kind} {}", crate::i18n::tr("服务")));
             let addresses: Vec<_> = addresses.into_iter().collect();
             let bound = addresses
                 .iter()

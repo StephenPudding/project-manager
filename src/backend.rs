@@ -6,7 +6,7 @@ use std::os::windows::process::CommandExt;
 use std::{
     fs,
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -672,6 +672,7 @@ pub fn open(target: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn preview_path(cache: &str, project: &Project) -> Option<PathBuf> {
     if project.preview.is_none()
         || project.id.len() != 16
@@ -679,7 +680,7 @@ pub fn preview_path(cache: &str, project: &Project) -> Option<PathBuf> {
     {
         return None;
     }
-    let path = Path::new(cache).join(format!("{}.jpg", project.id));
+    let path = PathBuf::from(cache).join(format!("{}.jpg", project.id));
     path.is_file().then_some(path)
 }
 

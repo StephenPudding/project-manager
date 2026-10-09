@@ -1,6 +1,8 @@
 use crate::assets::ActionIcon;
 use crate::backend::{self, Backend, Event, Project, Request, Snapshot};
 use crate::dev_servers::{DevServer, Discovery, Monitor};
+use crate::i18n::{self, tr};
+use crate::preview_cache::{self, PreviewCache, PreviewSource};
 use crate::smooth_scroll::SmoothScroll;
 use crate::theme::{self, Colors};
 use gpui::{prelude::*, *};
@@ -15,11 +17,7 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 use serde_json::json;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 const TITLE_BAR_HEIGHT: f32 = 40.;
 actions!(workbench, [CloseOverlay, FocusSearch]);
@@ -42,9 +40,9 @@ impl View {
 
     fn label(&self) -> String {
         match self {
-            Self::All => "项目库".into(),
-            Self::Favorites => "我的收藏".into(),
-            Self::Running => "正在运行".into(),
+            Self::All => tr("项目库").into(),
+            Self::Favorites => tr("我的收藏").into(),
+            Self::Running => tr("正在运行").into(),
             Self::Directory(root) => root_name(root),
         }
     }
@@ -75,10 +73,10 @@ enum SettingsSection {
 impl SettingsSection {
     fn label(self) -> &'static str {
         match self {
-            Self::Appearance => "外观主题",
-            Self::Directories => "项目目录",
-            Self::Preview => "扫描与预览",
-            Self::Storage => "数据存储",
+            Self::Appearance => tr("外观主题"),
+            Self::Directories => tr("项目目录"),
+            Self::Preview => tr("扫描与预览"),
+            Self::Storage => tr("数据存储"),
         }
     }
 
@@ -130,9 +128,9 @@ impl RunningEntry {
 impl SortOrder {
     fn label(self) -> &'static str {
         match self {
-            Self::Modified => "最近更新",
-            Self::Created => "创建日期",
-            Self::Name => "名称 A–Z",
+            Self::Modified => tr("最近更新"),
+            Self::Created => tr("创建日期"),
+            Self::Name => tr("名称 A–Z"),
         }
     }
 }
@@ -144,8 +142,7 @@ pub struct Workbench {
     discovering: bool,
     running_tab: RunningTab,
     snapshot: Snapshot,
-    images: HashMap<String, (u64, Arc<RenderImage>, f32)>,
-    loading_images: HashMap<String, u64>,
+    previews: PreviewCache,
     toast_timer: Option<Task<()>>,
     list_state: ListState,
     smooth_scroll: SmoothScroll,
@@ -295,7 +292,7 @@ impl Workbench {
                         "window-minimize",
                         IconName::WindowMinimize,
                         WindowControlArea::Min,
-                        "最小化",
+                        tr("最小化"),
                     ),
                     (
                         "window-maximize",
@@ -305,13 +302,17 @@ impl Workbench {
                             IconName::WindowMaximize
                         },
                         WindowControlArea::Max,
-                        if maximized { "还原" } else { "最大化" },
+                        if maximized {
+                            tr("还原")
+                        } else {
+                            tr("最大化")
+                        },
                     ),
                     (
                         "window-close",
                         IconName::WindowClose,
                         WindowControlArea::Close,
-                        "关闭",
+                        tr("关闭"),
                     ),
                 ]
                 .into_iter()
@@ -348,10 +349,11 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索项目、类型或端口…"));
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索项目、类型或端口…")));
         let directory = cx.new(|cx| InputState::new(window, cx).placeholder("E:\\projects"));
         let storage_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("例如 D:\\ProjectManagerData"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("例如 D:\\ProjectManagerData")));
         let storage_subscription =
             cx.subscribe(&storage_input, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -397,8 +399,7 @@ impl Workbench {
             discovering: false,
             running_tab: RunningTab::All,
             snapshot: Snapshot::default(),
-            images: HashMap::new(),
-            loading_images: HashMap::new(),
+            previews: PreviewCache::default(),
             toast_timer: None,
             list_state: ListState::new(0, ListAlignment::Top, px(200.)).measure_all(),
             smooth_scroll: SmoothScroll::default(),
@@ -414,7 +415,7 @@ impl Workbench {
             storage_pending: false,
             draft_roots: Vec::new(),
             view: View::All,
-            engine: "全部引擎".into(),
+            engine: tr("全部引擎").into(),
             sort_order: SortOrder::Modified,
             list: false,
             selected: None,
@@ -426,7 +427,7 @@ impl Workbench {
             draft_theme: "default".into(),
             busy: false,
             connected: false,
-            message: "正在读取本地项目缓存…".into(),
+            message: tr("正在读取本地项目缓存…").into(),
             message_at: Instant::now(),
             error: false,
             show_logs: false,
@@ -470,7 +471,7 @@ impl Workbench {
                 self.error = false;
                 self.message = message;
                 self.message_at = Instant::now();
-                if self.message == "设置已保存" {
+                if self.message == tr("设置已保存") {
                     self.close_settings(cx);
                 }
                 let stamp = self.message_at;
@@ -505,7 +506,7 @@ impl Workbench {
             theme::apply(&snapshot.settings.theme, cx);
         }
         if self.snapshot.settings.game_engines_only != snapshot.settings.game_engines_only {
-            self.engine = "全部引擎".into();
+            self.engine = tr("全部引擎").into();
             self.smooth_scroll.cancel();
             self.list_state.scroll_to(ListOffset {
                 item_ix: 0,
@@ -514,66 +515,85 @@ impl Workbench {
         }
         if matches!(&self.view, View::Directory(root) if !snapshot.settings.roots.contains(root)) {
             self.view = View::All;
-            self.engine = "全部引擎".into();
+            self.engine = tr("全部引擎").into();
         }
-        self.images
-            .retain(|id, _| snapshot.projects.iter().any(|p| &p.id == id));
-        for project in &snapshot.projects {
-            let Some(stamp) = project.captured_at else {
-                continue;
-            };
-            if self.images.get(&project.id).map(|(time, _, _)| *time) == Some(stamp)
-                || self.loading_images.get(&project.id) == Some(&stamp)
-            {
-                continue;
-            }
-            self.loading_images.insert(project.id.clone(), stamp);
-            let project = project.clone();
-            let cache = snapshot.cache_path.clone();
-            let id = project.id.clone();
-            // File access, JPEG decoding and resizing never run on the UI thread.
-            let load = cx.background_executor().spawn(async move {
-                let path = backend::preview_path(&cache, &project)?;
-                let decoded = image::ImageReader::open(path).ok()?.decode().ok()?;
-                let aspect = decoded.width() as f32 / decoded.height().max(1) as f32;
-                let mut pixels = if decoded.width().max(decoded.height()) > 1600 {
-                    decoded
-                        .resize(1600, 1600, image::imageops::FilterType::Triangle)
-                        .into_rgba8()
-                } else {
-                    decoded.into_rgba8()
-                };
-                // GPUI's renderer consumes BGRA pixels.
-                for pixel in pixels.chunks_exact_mut(4) {
-                    pixel.swap(0, 2);
-                }
-                Some((
-                    Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])),
-                    aspect,
-                ))
-            });
-            cx.spawn(async move |this, cx| {
+        self.snapshot = snapshot;
+    }
+
+    fn load_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for key in self.previews.next_jobs() {
+            let decode_key = key.clone();
+            let load = cx
+                .background_executor()
+                .spawn(async move { preview_cache::decode(&decode_key) });
+            cx.spawn_in(window, async move |this, cx| {
                 let loaded = load.await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.loading_images.get(&id) == Some(&stamp) {
-                        this.loading_images.remove(&id);
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if this.previews.complete(key, loaded, window) {
+                        cx.notify();
                     }
-                    if this
-                        .snapshot
-                        .projects
-                        .iter()
-                        .any(|p| p.id == id && p.captured_at == Some(stamp))
-                    {
-                        if let Some((image, aspect)) = loaded {
-                            this.images.insert(id, (stamp, image, aspect));
-                            cx.notify();
-                        }
-                    }
+                    this.load_previews(window, cx);
                 });
             })
             .detach();
         }
-        self.snapshot = snapshot;
+    }
+
+    fn preview_layer(&self, rows: Vec<Vec<PreviewSource>>, cx: &Context<Self>) -> AnyElement {
+        let list = self.list_state.clone();
+        let list_key = self.list_key.clone();
+        let owner = cx.entity().downgrade();
+        canvas(
+            |_, _, _| (),
+            move |_, _, window, cx| {
+                // Measuring every row must not decode every image. Read the actual viewport
+                // after layout, including changes made by smooth scrolling and the scrollbar.
+                let first = list.logical_scroll_top().item_ix.max(1).min(rows.len());
+                let bottom = list.viewport_bounds().bottom();
+                let mut end = first;
+                while end < rows.len() {
+                    let Some(bounds) = list.bounds_for_item(end) else {
+                        break;
+                    };
+                    if bounds.top() >= bottom {
+                        break;
+                    }
+                    end += 1;
+                }
+                let mut sources = rows[first..end]
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if first > 1 {
+                    sources.extend(rows[first - 1].iter().cloned());
+                }
+                if end < rows.len() {
+                    sources.extend(rows[end].iter().cloned());
+                }
+                let owner = owner.clone();
+                let list_key = list_key.clone();
+                window.defer(cx, move |window, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        if this.list_key != list_key {
+                            return;
+                        }
+                        let detail = this
+                            .selected
+                            .as_ref()
+                            .and_then(|id| this.snapshot.projects.iter().find(|p| &p.id == id))
+                            .and_then(|p| PreviewSource::new(&this.snapshot.cache_path, p));
+                        if this.previews.request(sources, detail, window) {
+                            cx.notify();
+                        }
+                        this.load_previews(window, cx);
+                    });
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
+        .into_any_element()
     }
     fn send(
         &mut self,
@@ -587,7 +607,7 @@ impl Workbench {
         }
         self.busy = true;
         self.error = false;
-        self.message = "正在处理，请稍候…".into();
+        self.message = tr("正在处理，请稍候…").into();
         self.message_at = Instant::now();
         if self
             .backend
@@ -601,7 +621,7 @@ impl Workbench {
         {
             self.busy = false;
             self.error = true;
-            self.message = "后台服务未连接，请重新打开工作台。".into();
+            self.message = tr("后台服务未连接，请重新打开工作台。").into();
         }
         cx.notify();
     }
@@ -611,31 +631,31 @@ impl Workbench {
                 "settings".into(),
                 json!({"favorite": p.id}),
                 None,
-                "收藏已更新",
+                tr("收藏已更新"),
             ),
             "start" => (
                 format!("projects/{}/start", p.id),
                 json!({}),
                 Some(p.id.clone()),
-                "项目已在独立窗口打开",
+                tr("项目已在独立窗口打开"),
             ),
             "stop" => (
                 format!("projects/{}/stop", p.id),
                 json!({}),
                 None,
-                "项目已停止",
+                tr("项目已停止"),
             ),
             "capture" => (
                 format!("projects/{}/capture", p.id),
                 json!({}),
                 None,
-                "已加入画面获取队列",
+                tr("已加入画面获取队列"),
             ),
             "install" => (
                 format!("projects/{}/install", p.id),
                 json!({}),
                 None,
-                "已开始安装依赖，可在项目详情中查看日志",
+                tr("已开始安装依赖，可在项目详情中查看日志"),
             ),
             _ => return,
         };
@@ -676,7 +696,7 @@ impl Workbench {
             .iter()
             .filter(|p| {
                 self.view.includes(p)
-                    && (self.engine == "全部引擎"
+                    && (self.engine == tr("全部引擎")
                         || p.categories(self.snapshot.settings.game_engines_only)
                             .contains(&self.engine.as_str()))
                     && format!(
@@ -722,12 +742,12 @@ impl Workbench {
             .p_5()
             .flex()
             .flex_col()
-            .child(text("工作空间", 11., colors.muted).mt_1().mb_3().px_3())
+            .child(text(tr("工作空间"), 11., colors.muted).mt_1().mb_3().px_3())
             .children(
                 [
-                    (View::All, "全部项目", IconName::LayoutDashboard, count),
-                    (View::Favorites, "我的收藏", IconName::Star, favorite),
-                    (View::Running, "正在运行", IconName::ExternalLink, running),
+                    (View::All, tr("全部项目"), IconName::LayoutDashboard, count),
+                    (View::Favorites, tr("我的收藏"), IconName::Star, favorite),
+                    (View::Running, tr("正在运行"), IconName::ExternalLink, running),
                 ]
                 .into_iter()
                 .enumerate()
@@ -757,7 +777,7 @@ impl Workbench {
                             this.view = view.clone();
                             this.discovering = this.view == View::Running;
                             this.monitor.watch(this.discovering);
-                            this.engine = "全部引擎".into();
+                            this.engine = tr("全部引擎").into();
                             this.smooth_scroll.cancel();
                             this.list_state.scroll_to(ListOffset {
                                 item_ix: 0,
@@ -775,9 +795,9 @@ impl Workbench {
                     .justify_between()
                     .px_3()
                     .mb_2()
-                    .child(text("项目目录", 11., colors.muted))
+                    .child(text(tr("项目目录"), 11., colors.muted))
                     .child(
-                        button("manage-roots", "管理", IconName::Settings2)
+                        button("manage-roots", tr("管理"), IconName::Settings2)
                             .ghost()
                             .xsmall()
                             .on_click(cx.listener(|this, _, window, cx| this.settings(window, cx))),
@@ -837,7 +857,7 @@ impl Workbench {
                                         this.view = View::Directory(root.clone());
                                         this.monitor.watch(false);
                                         this.discovering = false;
-                                        this.engine = "全部引擎".into();
+                                        this.engine = tr("全部引擎").into();
                                         this.smooth_scroll.cancel();
                                         this.list_state.scroll_to(ListOffset {
                                             item_ix: 0,
@@ -849,7 +869,7 @@ impl Workbench {
                     ),
             )
             .child(
-                button("settings", "工作台设置", IconName::Settings2)
+                button("settings", tr("工作台设置"), IconName::Settings2)
                     .ghost()
                     .mt_5()
                     .on_click(cx.listener(|this, _, window, cx| this.settings(window, cx))),
@@ -861,6 +881,7 @@ impl Workbench {
         height: f32,
         width: f32,
         corners: Corners<Pixels>,
+        detail: bool,
     ) -> AnyElement {
         let colors = self.colors();
         // GPUI's overflow mask is rectangular; round each painted layer explicitly.
@@ -873,7 +894,11 @@ impl Workbench {
                 .bg(rgb(colors.preview_bg)),
             corners,
         );
-        if let Some((_, image, aspect)) = self.images.get(&project.id) {
+        if let Some(preview) = PreviewSource::new(&self.snapshot.cache_path, project)
+            .and_then(|source| self.previews.get(source, detail))
+        {
+            let image = &preview.image;
+            let aspect = preview.aspect;
             let fit_width = width.min(height * aspect);
             let fit_height = fit_width / aspect;
             art.flex()
@@ -902,10 +927,16 @@ impl Workbench {
                 .into_any_element()
         } else {
             let message = match project.capture.as_str() {
-                "capturing" => "正在生成项目预览",
-                "queued" => "画面即将就绪",
-                "error" => "预览暂未获取",
-                _ => "等待第一次相遇",
+                "capturing" => tr("正在生成项目预览"),
+                "queued" => tr("画面即将就绪"),
+                "error" => tr("预览暂未获取"),
+                _ if PreviewSource::new(&self.snapshot.cache_path, project)
+                    .is_some_and(|source| self.previews.failed(source)) =>
+                {
+                    tr("预览读取失败")
+                }
+                _ if project.preview.is_some() => tr("正在加载预览…"),
+                _ => tr("等待第一次相遇"),
             };
             art.flex()
                 .flex_col()
@@ -915,7 +946,7 @@ impl Workbench {
                 .text_color(rgb(colors.preview_muted))
                 .child(icon(IconName::Frame, 32.))
                 .child(text(message, 13., colors.preview_text))
-                .child(text("自动获取 · 独立缓存", 10., colors.preview_muted))
+                .child(text(tr("自动获取 · 独立缓存"), 10., colors.preview_muted))
                 .into_any_element()
         }
     }
@@ -938,30 +969,29 @@ impl Workbench {
         let p_refresh = p.clone();
         let error_project_id = p.id.clone();
         let path = p.path.clone();
-        let (status, status_color) = if installing {
-            ("正在安装依赖", 0x326da8)
+        let (status, status_color, failed) = if installing {
+            (tr("正在安装依赖"), 0x326da8, false)
         } else if p.status == "stopping" {
-            ("正在停止", 0x9b6a1d)
+            (tr("正在停止"), 0x9b6a1d, false)
         } else if p.capture == "capturing" {
-            ("正在获取画面", 0x326da8)
+            (tr("正在获取画面"), 0x326da8, false)
         } else if p.status == "starting" {
-            ("正在启动", 0x326da8)
+            (tr("正在启动"), 0x326da8, false)
         } else if running {
-            ("正在运行", 0x327d52)
+            (tr("正在运行"), 0x327d52, false)
         } else if p.install_state == "error" {
-            ("依赖安装失败", 0xbf4b45)
+            (tr("依赖安装失败"), 0xbf4b45, true)
         } else if p.status == "error" {
-            ("启动失败", 0xbf4b45)
+            (tr("启动失败"), 0xbf4b45, true)
         } else if p.capture == "queued" {
-            ("等待获取画面", 0x9b6a1d)
+            (tr("等待获取画面"), 0x9b6a1d, false)
         } else if !p.dependencies_installed {
-            ("缺少依赖", 0x9b6a1d)
+            (tr("缺少依赖"), 0x9b6a1d, false)
         } else if p.capture == "error" || p.capture_error.is_some() {
-            ("预览获取失败", 0xbf4b45)
+            (tr("预览获取失败"), 0xbf4b45, true)
         } else {
-            ("准备就绪", 0x737c86)
+            (tr("准备就绪"), 0x737c86, false)
         };
-        let failed = matches!(status, "依赖安装失败" | "启动失败" | "预览获取失败");
         let art_height = if self.list {
             130.
         } else {
@@ -1008,9 +1038,9 @@ impl Workbench {
                                 colors.muted
                             }))
                             .tooltip(if p.favorite {
-                                "取消收藏"
+                                tr("取消收藏")
                             } else {
-                                "收藏项目"
+                                tr("收藏项目")
                             })
                             .disabled(self.busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1037,9 +1067,9 @@ impl Workbench {
                             if self.snapshot.settings.roots.len() > 1 {
                                 root_name(&p.root)
                             } else if p.preview.is_some() {
-                                "实机画面已就绪".into()
+                                tr("实机画面已就绪").into()
                             } else {
-                                "等待自动预览".into()
+                                tr("等待自动预览").into()
                             },
                             11.,
                             colors.muted,
@@ -1069,7 +1099,7 @@ impl Workbench {
                             .when(failed, |s| {
                                 s.child(
                                     Button::new(SharedString::from(format!("error-{}", p.id)))
-                                        .label("查看报错")
+                                        .label(tr("查看报错"))
                                         .ghost()
                                         .small()
                                         .h(px(28.))
@@ -1102,7 +1132,7 @@ impl Workbench {
                                     .rounded(px(8.))
                                     .border_1()
                                     .border_color(rgb(colors.line))
-                                    .tooltip("打开项目文件夹")
+                                    .tooltip(tr("打开项目文件夹"))
                                     .on_click(move |_, _, _| {
                                         let _ = backend::open(&path);
                                     }),
@@ -1115,7 +1145,7 @@ impl Workbench {
                                     .rounded(px(8.))
                                     .border_1()
                                     .border_color(rgb(colors.line))
-                                    .tooltip("更新项目预览")
+                                    .tooltip(tr("更新项目预览"))
                                     .disabled(self.busy || needs_install)
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.action(&p_refresh, "capture", cx)
@@ -1128,7 +1158,7 @@ impl Workbench {
                                             div().size(px(11.)).rounded(px(2.)).bg(rgb(0xa34b3e)),
                                         )
                                         .child(
-                                            text("停止", 14., 0xa34b3e)
+                                            text(tr("停止"), 14., 0xa34b3e)
                                                 .font_weight(FontWeight::MEDIUM),
                                         )
                                         .h(px(36.))
@@ -1138,7 +1168,7 @@ impl Workbench {
                                         .border_1()
                                         .border_color(rgb(0xe8c9c2))
                                         .bg(rgb(0xf9ece8))
-                                        .tooltip("停止运行此项目")
+                                        .tooltip(tr("停止运行此项目"))
                                         .disabled(self.busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.action(&p_stop, "stop", cx)
@@ -1157,13 +1187,13 @@ impl Workbench {
                                     .child(
                                         text(
                                             if installing {
-                                                "安装中…"
+                                                tr("安装中…")
                                             } else if needs_install {
-                                                "安装依赖"
+                                                tr("安装依赖")
                                             } else if running {
-                                                "进入"
+                                                tr("进入")
                                             } else {
-                                                "运行"
+                                                tr("运行")
                                             },
                                             14.,
                                             action_color,
@@ -1183,13 +1213,13 @@ impl Workbench {
                                     .bg(rgb(if needs_install { 0xfcf3df } else { colors.soft }))
                                     .text_color(rgb(action_color))
                                     .tooltip(if installing {
-                                        "正在安装依赖，点击项目画面可查看日志"
+                                        tr("正在安装依赖，点击项目画面可查看日志")
                                     } else if needs_install {
-                                        "使用项目的包管理器安装依赖"
+                                        tr("使用项目的包管理器安装依赖")
                                     } else if running {
-                                        "打开正在运行的项目"
+                                        tr("打开正在运行的项目")
                                     } else {
-                                        "启动项目"
+                                        tr("启动项目")
                                     })
                                     .disabled(self.busy || installing)
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1218,10 +1248,15 @@ impl Workbench {
                     bottom_left: px(if self.list { 12. } else { 0. }),
                     bottom_right: px(0.),
                 },
+                false,
             ))
             .child(
                 text(
-                    if running { "●  LIVE" } else { "实机画面" },
+                    if running {
+                        "●  LIVE"
+                    } else {
+                        tr("实机画面")
+                    },
                     9.,
                     colors.preview_text,
                 )
@@ -1383,6 +1418,16 @@ impl Workbench {
             self.list_state.reset(entries.len().max(1) + 1);
             self.list_key = key;
         }
+        let mut preview_rows = vec![Vec::new()];
+        preview_rows.extend(entries.iter().map(|entry| {
+            entry
+                .project
+                .as_ref()
+                .and_then(|p| PreviewSource::new(&self.snapshot.cache_path, p))
+                .into_iter()
+                .collect()
+        }));
+        let preview_layer = self.preview_layer(preview_rows, cx);
         div()
             .flex_1()
             .min_w_0()
@@ -1410,17 +1455,17 @@ impl Workbench {
                                 .rounded_xl()
                                 .child(text(
                                     if this.discovering {
-                                        "正在发现本机服务…"
+                                        tr("正在发现本机服务…")
                                     } else if this.discovery.warning.is_some() {
-                                        "未能完整读取本机服务"
+                                        tr("未能完整读取本机服务")
                                     } else if search.is_empty() {
                                         match this.running_tab {
-                                            RunningTab::All => "没有发现正在监听的开发服务",
-                                            RunningTab::Managed => "没有正在运行的管理器项目",
-                                            RunningTab::External => "没有正在运行的外部项目",
+                                            RunningTab::All => tr("没有发现正在监听的开发服务"),
+                                            RunningTab::Managed => tr("没有正在运行的管理器项目"),
+                                            RunningTab::External => tr("没有正在运行的外部项目"),
                                         }
                                     } else {
-                                        "没有匹配的服务"
+                                        tr("没有匹配的服务")
                                     },
                                     17.,
                                     colors.muted,
@@ -1429,17 +1474,17 @@ impl Workbench {
                                     if search.is_empty() {
                                         match this.running_tab {
                                             RunningTab::All => {
-                                                "在终端启动 npm run dev 后，这里会自动更新。"
+                                                tr("在终端启动 npm run dev 后，这里会自动更新。")
                                             }
                                             RunningTab::Managed => {
-                                                "已加入管理器的项目启动后会显示在这里。"
+                                                tr("已加入管理器的项目启动后会显示在这里。")
                                             }
                                             RunningTab::External => {
-                                                "未加入管理器的本机服务会显示在这里。"
+                                                tr("未加入管理器的本机服务会显示在这里。")
                                             }
                                         }
                                     } else {
-                                        "可以搜索项目名称、目录、PID 或端口。"
+                                        tr("可以搜索项目名称、目录、PID 或端口。")
                                     },
                                     12.,
                                     colors.muted,
@@ -1454,6 +1499,7 @@ impl Workbench {
                 .flex_1()
                 .min_h_0(),
             )
+            .child(preview_layer)
             .child(self.smooth_scroll.layer(self.list_state.clone()))
             .child(
                 Scrollbar::vertical(&self.smooth_scroll.handle(&self.list_state))
@@ -1484,9 +1530,14 @@ impl Workbench {
                             .items_center()
                             .gap_3()
                             .child(
-                                text("正在运行", 18., colors.ink).font_weight(FontWeight::SEMIBOLD),
+                                text(tr("正在运行"), 18., colors.ink)
+                                    .font_weight(FontWeight::SEMIBOLD),
                             )
-                            .child(text(format!("{count} 个端口"), 12., colors.muted)),
+                            .child(text(
+                                i18n::count("{count} 个端口", count),
+                                12.,
+                                colors.muted,
+                            )),
                     )
                     .child(
                         div()
@@ -1498,9 +1549,9 @@ impl Workbench {
                                 button(
                                     "refresh-ports",
                                     if self.discovering {
-                                        "正在发现…"
+                                        tr("正在发现…")
                                     } else {
-                                        "刷新端口"
+                                        tr("刷新端口")
                                     },
                                     icon(ActionIcon::Refresh, 18.),
                                 )
@@ -1509,7 +1560,7 @@ impl Workbench {
                                 .rounded(px(8.))
                                 .primary()
                                 .disabled(self.discovering)
-                                .tooltip("重新发现本机开发服务；此页面每 5 秒自动更新")
+                                .tooltip(tr("重新发现本机开发服务；此页面每 5 秒自动更新"))
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
                                         this.discovering = true;
@@ -1523,9 +1574,9 @@ impl Workbench {
             .child(
                 div().flex().items_center().gap_2().mt_4().children(
                     [
-                        (RunningTab::All, "全部"),
-                        (RunningTab::Managed, "管理器项目"),
-                        (RunningTab::External, "外部项目"),
+                        (RunningTab::All, tr("全部")),
+                        (RunningTab::Managed, tr("管理器项目")),
+                        (RunningTab::External, tr("外部项目")),
                     ]
                     .into_iter()
                     .enumerate()
@@ -1574,7 +1625,7 @@ impl Workbench {
                 ),
             )
             .when_some(self.discovery.warning.clone(), |s, warning| {
-                s.child(text(warning, 12., 0xa34b3e).mt_3())
+                s.child(text(i18n::message(&warning), 12., 0xa34b3e).mt_3())
             })
     }
 
@@ -1597,17 +1648,14 @@ impl Workbench {
             })
             .collect::<Vec<_>>()
             .join(" · ");
-        let preview = if let Some(project) = entry
-            .project
-            .as_ref()
-            .filter(|p| self.images.contains_key(&p.id))
+        let preview = if let Some(project) = entry.project.as_ref().filter(|p| p.preview.is_some())
         {
             let project_id = project.id.clone();
             div()
                 .id(SharedString::from(format!("{id}-preview")))
                 .flex_shrink_0()
                 .cursor_pointer()
-                .child(self.art(project, 68., 100., Corners::all(px(7.))))
+                .child(self.art(project, 68., 100., Corners::all(px(7.)), false))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.selected = Some(project_id.clone());
                     this.show_logs = false;
@@ -1658,9 +1706,9 @@ impl Workbench {
                             .child(text(entry.server.kind.clone(), 12., colors.accent))
                             .child(text(
                                 if entry.owned {
-                                    "工作台启动"
+                                    tr("工作台启动")
                                 } else {
-                                    "外部启动"
+                                    tr("外部启动")
                                 },
                                 12.,
                                 colors.muted,
@@ -1675,7 +1723,9 @@ impl Workbench {
                     )
                     .child(
                         text(
-                            directory.clone().unwrap_or_else(|| "目录信息不可用".into()),
+                            directory
+                                .clone()
+                                .unwrap_or_else(|| tr("目录信息不可用").into()),
                             12.,
                             colors.muted,
                         )
@@ -1691,7 +1741,7 @@ impl Workbench {
                     .child(
                         text(
                             if entry.server.port == 0 {
-                                "端口待就绪".into()
+                                tr("端口待就绪").into()
                             } else {
                                 format!(":{}", entry.server.port)
                             },
@@ -1720,7 +1770,7 @@ impl Workbench {
                                 .rounded(px(8.))
                                 .border_1()
                                 .border_color(rgb(colors.line))
-                                .tooltip("打开项目文件夹")
+                                .tooltip(tr("打开项目文件夹"))
                                 .on_click(move |_, _, _| {
                                     let _ = backend::open(&path);
                                 }),
@@ -1730,7 +1780,7 @@ impl Workbench {
                         s.child(
                             button(
                                 SharedString::from(format!("{id}-stop")),
-                                "停止",
+                                tr("停止"),
                                 IconName::Close,
                             )
                             .h(px(36.))
@@ -1751,7 +1801,7 @@ impl Workbench {
                     .child(
                         button(
                             SharedString::from(format!("{id}-open")),
-                            "打开",
+                            tr("打开"),
                             IconName::ExternalLink,
                         )
                         .h(px(36.))
@@ -1763,7 +1813,7 @@ impl Workbench {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Err(error) = backend::open(&url) {
                                 this.error = true;
-                                this.message = format!("无法打开页面：{error}");
+                                this.message = format!("{}: {error}", tr("无法打开页面"));
                                 this.message_at = Instant::now();
                                 cx.notify();
                             }
@@ -1805,6 +1855,13 @@ impl Workbench {
             }
             self.list_key = key;
         }
+        let mut preview_rows = vec![Vec::new()];
+        preview_rows.extend(projects.chunks(columns).map(|row| {
+            row.iter()
+                .filter_map(|p| PreviewSource::new(&self.snapshot.cache_path, p))
+                .collect()
+        }));
+        let preview_layer = self.preview_layer(preview_rows, cx);
         div()
             .flex_1()
             .min_w_0()
@@ -1843,6 +1900,7 @@ impl Workbench {
                 .flex_1()
                 .min_h_0(),
             )
+            .child(preview_layer)
             .child(self.smooth_scroll.layer(self.list_state.clone()))
             .child(
                 Scrollbar::vertical(&self.smooth_scroll.handle(&self.list_state))
@@ -1870,7 +1928,7 @@ impl Workbench {
             .collect::<Vec<_>>();
         engines.sort();
         engines.dedup();
-        engines.insert(0, "全部引擎".into());
+        engines.insert(0, tr("全部引擎").into());
         let sort_view = cx.entity().downgrade();
         let selected_sort = self.sort_order;
         div()
@@ -1896,8 +1954,12 @@ impl Workbench {
                                     .font_weight(FontWeight::SEMIBOLD),
                             )
                             .child(
-                                text(format!("{} 个项目", project_count), 11., colors.muted)
-                                    .flex_shrink_0(),
+                                text(
+                                    i18n::count("{count} 个项目", project_count),
+                                    11.,
+                                    colors.muted,
+                                )
+                                .flex_shrink_0(),
                             ),
                     )
                     .child(
@@ -1923,9 +1985,9 @@ impl Workbench {
                                         Corner::TopRight,
                                         move |mut menu, _, _| {
                                             for (order, label) in [
-                                                (SortOrder::Modified, "最近更新"),
-                                                (SortOrder::Created, "创建日期（最新优先）"),
-                                                (SortOrder::Name, "名称 A–Z"),
+                                                (SortOrder::Modified, tr("最近更新")),
+                                                (SortOrder::Created, tr("创建日期（最新优先）")),
+                                                (SortOrder::Name, tr("名称 A–Z")),
                                             ] {
                                                 let view = sort_view.clone();
                                                 menu = menu.item(
@@ -1966,9 +2028,9 @@ impl Workbench {
                                     .border_1()
                                     .border_color(rgb(colors.line))
                                     .tooltip(if self.list {
-                                        "切换到卡片视图"
+                                        tr("切换到卡片视图")
                                     } else {
-                                        "切换到列表视图"
+                                        tr("切换到列表视图")
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.list = !this.list;
@@ -1976,19 +2038,19 @@ impl Workbench {
                                     })),
                             )
                             .child(
-                                button("scan", "扫描", icon(ActionIcon::Refresh, 18.))
+                                button("scan", tr("扫描"), icon(ActionIcon::Refresh, 18.))
                                     .h(px(36.))
                                     .px(px(16.))
                                     .rounded(px(8.))
                                     .primary()
-                                    .tooltip("扫描全部目录")
+                                    .tooltip(tr("扫描全部目录"))
                                     .disabled(self.busy)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         let mut ops = vec![("scan".into(), json!({}))];
                                         if this.snapshot.settings.auto_capture {
                                             ops.push(("capture-all".into(), json!({})));
                                         }
-                                        this.send(ops, None, "项目目录已重新扫描", cx);
+                                        this.send(ops, None, tr("项目目录已重新扫描"), cx);
                                     })),
                             ),
                     ),
@@ -2017,10 +2079,10 @@ impl Workbench {
                                 .text_color(rgb(if active { colors.accent } else { colors.muted }))
                                 .child(
                                     text(
-                                        if engine == "全部引擎"
+                                        if engine == tr("全部引擎")
                                             && !self.snapshot.settings.game_engines_only
                                         {
-                                            "全部类型".into()
+                                            tr("全部类型").into()
                                         } else {
                                             engine.clone()
                                         },
@@ -2067,15 +2129,15 @@ impl Workbench {
                     )
                     .child(text(
                         if self.connected {
-                            "还没有找到这个世界"
+                            tr("还没有找到这个世界")
                         } else {
-                            "正在连接你的项目工作空间"
+                            tr("正在连接你的项目工作空间")
                         },
                         17.,
                         colors.muted,
                     ))
                     .child(text(
-                        "尝试其他关键词，或在设置中选择项目目录。",
+                        tr("尝试其他关键词，或在设置中选择项目目录。"),
                         12.,
                         colors.muted,
                     )),
@@ -2207,7 +2269,7 @@ impl Workbench {
                                             .justify_between()
                                             .gap_1()
                                             .child(
-                                                text(choice.name, 13., preview.ink)
+                                                text(tr(choice.name), 13., preview.ink)
                                                     .truncate()
                                                     .font_weight(FontWeight::MEDIUM),
                                             )
@@ -2253,7 +2315,7 @@ impl Workbench {
             files: false,
             directories: true,
             multiple: true,
-            prompt: Some("选择项目目录".into()),
+            prompt: Some(tr("选择项目目录").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picker.await {
@@ -2291,7 +2353,7 @@ impl Workbench {
                             .rounded(px(8.)),
                     )
                     .child(
-                        button("add-root", "添加", icon(IconName::Plus, 18.))
+                        button("add-root", tr("添加"), icon(IconName::Plus, 18.))
                             .h(px(40.))
                             .px_4()
                             .rounded(px(8.))
@@ -2308,7 +2370,7 @@ impl Workbench {
                             .icon(icon(IconName::FolderOpen, 18.))
                             .size(px(40.))
                             .rounded(px(8.))
-                            .tooltip("选择目录，支持多选")
+                            .tooltip(tr("选择目录，支持多选"))
                             .disabled(self.busy)
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.choose_settings_directories(cx)),
@@ -2320,9 +2382,9 @@ impl Workbench {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(text("已添加的目录", 12., colors.muted))
+                    .child(text(tr("已添加的目录"), 12., colors.muted))
                     .child(text(
-                        format!("{} 个", self.draft_roots.len()),
+                        i18n::count("{count} 个", self.draft_roots.len()),
                         12.,
                         colors.muted,
                     )),
@@ -2348,8 +2410,8 @@ impl Workbench {
                                 .gap_3()
                                 .text_color(rgb(colors.accent))
                                 .child(icon(IconName::FolderOpen, 28.))
-                                .child(text("还没有项目目录", 14., colors.ink))
-                                .child(text("输入路径或选择文件夹添加。", 12., colors.muted)),
+                                .child(text(tr("还没有项目目录"), 14., colors.ink))
+                                .child(text(tr("输入路径或选择文件夹添加。"), 12., colors.muted)),
                         )
                     })
                     .children(self.draft_roots.iter().enumerate().map(|(index, root)| {
@@ -2393,18 +2455,24 @@ impl Workbench {
                                     .child(text(root.clone(), 12., colors.muted).mt_1().truncate()),
                             )
                             .child(
-                                button(("remove-root", index), "移除", icon(IconName::Close, 14.))
-                                    .ghost()
-                                    .h(px(32.))
-                                    .px_2()
-                                    .text_color(rgb(colors.muted))
-                                    .disabled(self.busy)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                button(
+                                    ("remove-root", index),
+                                    tr("移除"),
+                                    icon(IconName::Close, 14.),
+                                )
+                                .ghost()
+                                .h(px(32.))
+                                .px_2()
+                                .text_color(rgb(colors.muted))
+                                .disabled(self.busy)
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         if index < this.draft_roots.len() {
                                             this.draft_roots.remove(index);
                                         }
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                     })),
             )
@@ -2463,16 +2531,16 @@ impl Workbench {
             .gap_3()
             .child(self.settings_option(
                 "auto-capture",
-                "自动获取预览",
-                "扫描时，自动获取缺失的项目画面。",
+                tr("自动获取预览"),
+                tr("扫描时，自动获取缺失的项目画面。"),
                 self.auto_capture,
                 |this, value| this.auto_capture = value,
                 cx,
             ))
             .child(self.settings_option(
                 "game-engines-only",
-                "仅识别游戏引擎",
-                "隐藏前端框架分类，其他项目保留在 Web 中。",
+                tr("仅识别游戏引擎"),
+                tr("隐藏前端框架分类，其他项目保留在 Web 中。"),
                 self.game_engines_only,
                 |this, value| this.game_engines_only = value,
                 cx,
@@ -2494,15 +2562,15 @@ impl Workbench {
                             .flex_1()
                             .min_w_0()
                             .child(
-                                text("更新项目画面", 14., colors.ink)
+                                text(tr("更新项目画面"), 14., colors.ink)
                                     .font_weight(FontWeight::MEDIUM),
                             )
-                            .child(text("重新获取所有项目的预览。", 12., colors.muted).mt_2()),
+                            .child(text(tr("重新获取所有项目的预览。"), 12., colors.muted).mt_2()),
                     )
                     .child(
                         button(
                             "refresh-all",
-                            "刷新全部画面",
+                            tr("刷新全部画面"),
                             icon(ActionIcon::Refresh, 18.),
                         )
                         .h(px(40.))
@@ -2513,7 +2581,7 @@ impl Workbench {
                             this.send(
                                 vec![("capture-all".into(), json!({"force": true}))],
                                 None,
-                                "所有项目已加入预览队列",
+                                tr("所有项目已加入预览队列"),
                                 cx,
                             );
                         })),
@@ -2526,7 +2594,7 @@ impl Workbench {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("选择数据存储目录".into()),
+            prompt: Some(tr("选择数据存储目录").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picker.await {
@@ -2567,7 +2635,7 @@ impl Workbench {
                 json!({"path": self.storage_input.read(cx).value().to_string()}),
             )],
             None,
-            "数据存储目录已设置",
+            tr("数据存储目录已设置"),
             cx,
         );
     }
@@ -2577,32 +2645,32 @@ impl Workbench {
         div().flex().flex_col().gap_5()
             .when_some(self.storage_directory.clone(), |s, path| s.child(
                 div().p_5().rounded(px(10.)).bg(rgb(colors.panel))
-                    .child(text("当前存储目录", 12., colors.muted))
+                    .child(text(tr("当前存储目录"), 12., colors.muted))
                     .child(text(path.clone(), 14., colors.ink).mt_2())
-                    .child(button("open-storage", "打开目录", icon(IconName::FolderOpen, 16.))
+                    .child(button("open-storage", tr("打开目录"), icon(IconName::FolderOpen, 16.))
                         .ghost().h(px(36.)).mt_3().on_click(move |_, _, _| { let _ = backend::open(&path); }))
             ))
             .child(div().flex().flex_col().gap_3()
-                .child(text(if self.storage_required {"数据存储目录"} else {"新的存储目录"}, 14., colors.ink)
+                .child(text(if self.storage_required {tr("数据存储目录")} else {tr("新的存储目录")}, 14., colors.ink)
                     .font_weight(FontWeight::MEDIUM))
                 .child(Styled::h(Input::new(&self.storage_input).disabled(self.busy || self.snapshot.service_active), px(42.))
                     .w_full().text_size(px(14.)))
-                .child(div().flex().justify_end().child(button("choose-storage", "选择文件夹…", icon(IconName::FolderOpen, 18.))
+                .child(div().flex().justify_end().child(button("choose-storage", tr("选择文件夹…"), icon(IconName::FolderOpen, 18.))
                     .h(px(40.)).px_4().disabled(self.busy || self.snapshot.service_active)
                     .on_click(cx.listener(|this, _, window, cx| this.choose_storage(window, cx))))))
             .child(text(if self.storage_required {
-                "请选择一个空文件夹保存项目列表、收藏、设置和预览。已有的数据目录也可以直接选择使用。"
+                tr("请选择一个空文件夹保存项目列表、收藏、设置和预览。已有的数据目录也可以直接选择使用。")
             } else {
-                "选择空文件夹，迁移完成后使用新位置。原目录保留备份。"
+                tr("选择空文件夹，迁移完成后使用新位置。原目录保留备份。")
             }, 13., colors.muted).line_height(px(22.)))
             .when_some(self.storage_previous.clone(), |s, path| s.child(
                 div().p_4().rounded(px(10.)).bg(rgb(colors.panel))
-                    .child(text("发现已有数据，将自动迁移到新目录。", 13., colors.ink))
+                    .child(text(tr("发现已有数据，将自动迁移到新目录。"), 13., colors.ink))
                     .child(text(path, 12., colors.muted).mt_2())
             ))
-            .when(self.snapshot.service_active, |s| s.child(text("请先停止运行中的项目，并等待扫描、安装或获取画面完成。", 13., colors.muted)))
-            .when(self.storage_pending, |s| s.child(text("正在准备数据，请稍候…", 13., colors.accent)))
-            .when(!self.storage_error.is_empty(), |s| s.child(text(self.storage_error.clone(), 13., 0xc54646).line_height(px(22.))))
+            .when(self.snapshot.service_active, |s| s.child(text(tr("请先停止运行中的项目，并等待扫描、安装或获取画面完成。"), 13., colors.muted)))
+            .when(self.storage_pending, |s| s.child(text(tr("正在准备数据，请稍候…"), 13., colors.accent)))
+            .when(!self.storage_error.is_empty(), |s| s.child(text(i18n::message(&self.storage_error), 13., 0xc54646).line_height(px(22.))))
     }
 
     fn storage_setup(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2624,19 +2692,23 @@ impl Workbench {
                     .flex_col()
                     .gap_6()
                     .child(
-                        text("欢迎使用 Project Manager", 26., colors.ink)
+                        text(tr("欢迎使用 Project Manager"), 26., colors.ink)
                             .font_weight(FontWeight::SEMIBOLD),
                     )
-                    .child(text("首次使用，请先设置数据存储位置。", 14., colors.muted))
+                    .child(text(
+                        tr("首次使用，请先设置数据存储位置。"),
+                        14.,
+                        colors.muted,
+                    ))
                     .when(self.storage_loading, |s| {
-                        s.child(text("正在读取存储设置…", 14., colors.muted))
+                        s.child(text(tr("正在读取存储设置…"), 14., colors.muted))
                     })
                     .when(!self.storage_loading, |s| s.child(self.storage_form(cx)))
                     .child(
                         div().flex().justify_end().child(
                             button(
                                 "finish-storage-setup",
-                                "保存并进入",
+                                tr("保存并进入"),
                                 icon(IconName::Check, 18.),
                             )
                             .primary()
@@ -2678,21 +2750,21 @@ impl Workbench {
         if roots_changed && self.auto_capture {
             ops.push(("capture-all".into(), json!({})));
         }
-        self.engine = "全部引擎".into();
-        self.send(ops, None, "设置已保存", cx);
+        self.engine = tr("全部引擎").into();
+        self.send(ops, None, tr("设置已保存"), cx);
     }
 
     fn settings_modal(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let colors = self.colors();
         let width = (f32::from(window.viewport_size().width) - 64.).min(920.);
         let height = (f32::from(window.viewport_size().height) - TITLE_BAR_HEIGHT - 48.).min(660.);
-        let navigation_width = 184.;
+        let navigation_width = if i18n::english() { 204. } else { 184. };
         let content_width = width - navigation_width - 2. - 64.;
         let description = match self.settings_section {
-            SettingsSection::Appearance => "点击主题即时预览，保存后保留选择。",
-            SettingsSection::Directories => "管理项目来源文件夹。",
-            SettingsSection::Preview => "设置项目识别和画面获取方式。",
-            SettingsSection::Storage => "设置配置、项目列表与预览的保存位置。",
+            SettingsSection::Appearance => tr("点击主题即时预览，保存后保留选择。"),
+            SettingsSection::Directories => tr("管理项目来源文件夹。"),
+            SettingsSection::Preview => tr("设置项目识别和画面获取方式。"),
+            SettingsSection::Storage => tr("设置配置、项目列表与预览的保存位置。"),
         };
         let content = match self.settings_section {
             SettingsSection::Appearance => self.theme_picker(content_width, cx).into_any_element(),
@@ -2721,14 +2793,16 @@ impl Workbench {
                     .justify_between()
                     .border_b_1()
                     .border_color(rgb(colors.line))
-                    .child(text("工作台设置", 20., colors.ink).font_weight(FontWeight::SEMIBOLD))
+                    .child(
+                        text(tr("工作台设置"), 20., colors.ink).font_weight(FontWeight::SEMIBOLD),
+                    )
                     .child(
                         Button::new("close-settings")
                             .icon(icon(IconName::Close, 18.))
                             .ghost()
                             .size(px(36.))
                             .rounded(px(8.))
-                            .tooltip("关闭设置")
+                            .tooltip(tr("关闭设置"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close_settings(cx);
                                 cx.notify();
@@ -2866,7 +2940,7 @@ impl Workbench {
                                     .gap_3()
                                     .child(
                                         Button::new("cancel-settings")
-                                            .label("取消")
+                                            .label(tr("取消"))
                                             .h(px(40.))
                                             .min_w(px(80.))
                                             .rounded(px(8.))
@@ -2880,9 +2954,9 @@ impl Workbench {
                                         button(
                                             "save-settings",
                                             if self.settings_section == SettingsSection::Storage {
-                                                "迁移并使用"
+                                                tr("迁移并使用")
                                             } else {
-                                                "保存设置"
+                                                tr("保存设置")
                                             },
                                             icon(IconName::Check, 18.),
                                         )
@@ -2957,6 +3031,7 @@ impl Workbench {
                 art_height,
                 width - 48.,
                 Corners::all(px(8.)),
+                true,
             )))
             .child(
                 div()
@@ -2972,7 +3047,7 @@ impl Workbench {
                             .child(
                                 button(
                                     "detail-capture",
-                                    "更新画面",
+                                    tr("更新画面"),
                                     icon(ActionIcon::Refresh, 18.),
                                 )
                                 .disabled(self.busy || needs_install)
@@ -2982,7 +3057,7 @@ impl Workbench {
                             )
                             .when(p.status == "running", |s| {
                                 s.child(
-                                    button("stop", "停止", IconName::Close)
+                                    button("stop", tr("停止"), IconName::Close)
                                         .disabled(self.busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.action(&p_stop, "stop", cx)
@@ -2993,13 +3068,13 @@ impl Workbench {
                                 button(
                                     "detail-play",
                                     if installing {
-                                        "安装中…"
+                                        tr("安装中…")
                                     } else if needs_install {
-                                        "安装依赖"
+                                        tr("安装依赖")
                                     } else if p.status == "running" {
-                                        "打开项目"
+                                        tr("打开项目")
                                     } else {
-                                        "启动项目"
+                                        tr("启动项目")
                                     },
                                     if installing {
                                         icon(IconName::LoaderCircle, 18.)
@@ -3028,11 +3103,13 @@ impl Workbench {
                 |s| {
                     s.child(
                         text(
-                            p.install_error
-                                .clone()
-                                .or(p.error.clone())
-                                .or(p.capture_error.clone())
-                                .unwrap_or_default(),
+                            i18n::message(
+                                p.install_error
+                                    .as_deref()
+                                    .or(p.error.as_deref())
+                                    .or(p.capture_error.as_deref())
+                                    .unwrap_or_default(),
+                            ),
                             11.,
                             0xac6549,
                         )
@@ -3050,7 +3127,7 @@ impl Workbench {
                     .pt_3()
                     .child(text(p.path.clone(), 11., colors.muted))
                     .child(
-                        button("detail-folder", "打开文件夹", IconName::FolderOpen)
+                        button("detail-folder", tr("打开文件夹"), IconName::FolderOpen)
                             .ghost()
                             .on_click(move |_, _, _| {
                                 let _ = backend::open(&path);
@@ -3061,9 +3138,9 @@ impl Workbench {
                 button(
                     "toggle-logs",
                     if self.show_logs {
-                        "收起日志"
+                        tr("收起日志")
                     } else {
-                        "查看日志"
+                        tr("查看日志")
                     },
                     IconName::SquareTerminal,
                 )
@@ -3087,7 +3164,7 @@ impl Workbench {
                         .mt_2()
                         .child(text(
                             if p.logs.is_empty() {
-                                "尚未启动".to_owned()
+                                tr("尚未启动").to_owned()
                             } else {
                                 p.logs.clone()
                             },
@@ -3127,7 +3204,11 @@ impl Render for Workbench {
             .relative()
             .bg(rgb(colors.bg))
             .text_color(rgb(colors.ink))
-            .font_family("Microsoft YaHei UI")
+            .font_family(if i18n::english() {
+                "Segoe UI"
+            } else {
+                "Microsoft YaHei UI"
+            })
             .text_size(px(13.))
             .key_context("Workbench")
             .on_action(cx.listener(|this, _: &CloseOverlay, _, cx| {
@@ -3191,7 +3272,7 @@ impl Render for Workbench {
                                     .justify_center()
                                     .child(
                                         text(
-                                            self.message.clone(),
+                                            i18n::message(&self.message),
                                             12.,
                                             if self.error {
                                                 0xffe2cd

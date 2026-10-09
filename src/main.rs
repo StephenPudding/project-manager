@@ -2,6 +2,8 @@
 mod assets;
 mod backend;
 mod dev_servers;
+mod i18n;
+mod preview_cache;
 mod smooth_scroll;
 mod storage;
 mod theme;
@@ -15,6 +17,7 @@ fn main() {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_component::init(cx);
+            gpui_component::set_locale(if i18n::english() { "en" } else { "zh-CN" });
             Theme::change(ThemeMode::Light, None, cx);
             theme::apply("default", cx);
             cx.bind_keys([
