@@ -12,6 +12,13 @@ $package = Join-Path $staging $packageName
 $runtime = Join-Path $package 'runtime'
 New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 Copy-Item -LiteralPath $executable -Destination $package
+$finder = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (-not (Test-Path -LiteralPath $finder)) { throw 'Visual Studio Build Tools are required to package the redistributable C++ runtime.' }
+$visualStudio = & $finder -latest -products '*' -property installationPath
+$crt = Get-ChildItem -Path (Join-Path $visualStudio 'VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT\vcruntime140.dll') |
+    Sort-Object FullName -Descending | Select-Object -First 1
+if (-not $crt) { throw 'Visual C++ redistributable runtime was not found.' }
+Copy-Item -LiteralPath $crt.FullName -Destination $package
 foreach ($name in @('README.md','README.zh-CN.md','LICENSE','SECURITY.md','THIRD_PARTY_NOTICES.md')) {
     Copy-Item -LiteralPath (Join-Path $workspace $name) -Destination $package
 }
@@ -70,6 +77,12 @@ foreach ($dependency in [regex]::Matches($lockText, '(?m)^name = "([^"]+)"\r?\nv
         New-Item -ItemType Directory -Path $licenseTarget | Out-Null
         foreach ($license in $texts) { Copy-Item -LiteralPath $license.FullName -Destination $licenseTarget }
     }
+}
+# Installed browsers can accumulate diagnostic logs; never distribute those files.
+foreach ($diagnostic in @(Get-ChildItem -LiteralPath $package -File -Recurse -Filter '*.log')) {
+    $diagnosticPath = [System.IO.Path]::GetFullPath($diagnostic.FullName)
+    if (-not $diagnosticPath.StartsWith($package + '\',[System.StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected diagnostic path' }
+    Remove-Item -LiteralPath $diagnosticPath
 }
 $archive = Join-Path $distribution "$packageName.zip"
 if (Test-Path -LiteralPath $archive) { throw "Archive already exists; choose a new version: $archive" }
