@@ -1,4 +1,9 @@
 {
+  "局域网预览": "LAN preview",
+  "复制局域网链接": "Copy LAN preview link",
+  "局域网链接已复制": "LAN preview link copied",
+  "局域网预览启动失败": "Could not start LAN preview",
+  "未检测到局域网地址，请连接 Wi-Fi 或有线网络。": "No LAN address found. Connect to Wi-Fi or Ethernet.",
   "预览读取失败": "Could not load preview",
   "服务": "service",
   "本地服务未能就绪，请查看 {value}": "The local service did not start. See {value}",

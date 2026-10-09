@@ -223,6 +223,98 @@ impl Workbench {
         .colors()
     }
 
+    fn lan_copy_button(
+        &self,
+        id: impl Into<ElementId>,
+        address: String,
+        cx: &Context<Self>,
+    ) -> Button {
+        Button::new(id)
+            .icon(icon(IconName::Copy, 18.))
+            .ghost()
+            .size(px(36.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(self.colors().line))
+            .tooltip(format!("{}\n{}", tr("复制局域网链接"), address))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(address.clone()));
+                if this.busy {
+                    return;
+                }
+                this.message = tr("局域网链接已复制").into();
+                this.message_at = Instant::now();
+                this.error = false;
+                let stamp = this.message_at;
+                this.toast_timer = Some(cx.spawn(async move |this, cx| {
+                    Timer::after(Duration::from_secs(2)).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.message_at == stamp && !this.busy && !this.error {
+                            this.message.clear();
+                            cx.notify();
+                        }
+                    });
+                }));
+                cx.notify();
+            }))
+    }
+
+    fn lan_links(&self, project: &Project, cx: &Context<Self>) -> AnyElement {
+        let colors = self.colors();
+        div()
+            .mb_3()
+            .p_3()
+            .rounded(px(8.))
+            .bg(rgb(colors.panel))
+            .child(text(tr("局域网预览"), 13., colors.ink).font_weight(FontWeight::MEDIUM))
+            .when(project.lan_urls.is_empty(), |s| {
+                s.child(
+                    text(
+                        project
+                            .lan_error
+                            .as_deref()
+                            .map(i18n::message)
+                            .unwrap_or_else(|| {
+                                tr("未检测到局域网地址，请连接 Wi-Fi 或有线网络。").into()
+                            }),
+                        12.,
+                        colors.muted,
+                    )
+                    .mt_2(),
+                )
+            })
+            .when(!project.lan_urls.is_empty(), |s| {
+                s.child(
+                    div()
+                        .id("lan-addresses")
+                        .max_h(px(112.))
+                        .overflow_y_scroll()
+                        .children(project.lan_urls.iter().enumerate().map(|(index, address)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .mt_2()
+                                .child(
+                                    text(address.clone(), 13., colors.accent)
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate(),
+                                )
+                                .child(self.lan_copy_button(
+                                    SharedString::from(format!(
+                                        "detail-lan-{}-{index}",
+                                        project.id
+                                    )),
+                                    address.clone(),
+                                    cx,
+                                ))
+                        })),
+                )
+            })
+            .into_any_element()
+    }
+
     fn close_settings(&mut self, cx: &mut Context<Self>) {
         if self.settings_open {
             self.settings_open = false;
@@ -1176,6 +1268,16 @@ impl Workbench {
                                         })),
                                 )
                             })
+                            .when_some(
+                                p.lan_urls.first().cloned().filter(|_| running),
+                                |s, address| {
+                                    s.child(self.lan_copy_button(
+                                        SharedString::from(format!("lan-{}", p.id)),
+                                        address,
+                                        cx,
+                                    ))
+                                },
+                            )
                             .child(
                                 Button::new(SharedString::from(format!("play-{}", p.id)))
                                     .icon(if installing {
@@ -1636,6 +1738,11 @@ impl Workbench {
         let id = entry.key();
         let url = entry.server.url.clone();
         let directory = entry.server.directory.clone();
+        let lan_address = entry
+            .project
+            .as_ref()
+            .and_then(|p| p.lan_urls.first())
+            .cloned();
         let endpoint = entry
             .server
             .addresses
@@ -1762,6 +1869,13 @@ impl Workbench {
                     .flex_shrink_0()
                     .items_center()
                     .gap_2()
+                    .when_some(lan_address, |s, address| {
+                        s.child(self.lan_copy_button(
+                            SharedString::from(format!("{id}-lan")),
+                            address,
+                            cx,
+                        ))
+                    })
                     .when_some(directory, |s, path| {
                         s.child(
                             Button::new(SharedString::from(format!("{id}-folder")))
@@ -2996,10 +3110,16 @@ impl Workbench {
         let p_capture = p.clone();
         let p_stop = p.clone();
         let path = p.path.clone();
+        let lan_height = if p.status == "running" {
+            56. + (44. * p.lan_urls.len().max(1) as f32).min(112.)
+        } else {
+            0.
+        };
         let art_height = (f32::from(window.viewport_size().height)
             - TITLE_BAR_HEIGHT
+            - lan_height
             - if self.show_logs { 420. } else { 295. })
-        .clamp(200., 540.);
+        .clamp(if lan_height > 0. { 100. } else { 200. }, 540.);
         let width = (f32::from(window.viewport_size().width) - 120.).min(960.);
         let detail = div()
             .w(px(width))
@@ -3099,6 +3219,7 @@ impl Workbench {
                             ),
                     ),
             )
+            .when(p.status == "running", |s| s.child(self.lan_links(&p, cx)))
             .when(
                 p.error.is_some() || p.capture_error.is_some() || p.install_error.is_some(),
                 |s| {

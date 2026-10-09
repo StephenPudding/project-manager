@@ -7,6 +7,7 @@ import { spawn, execFile } from 'node:child_process';
 import { chromium } from 'playwright';
 import { captureBrowserOptions, captureGame } from './capture.mjs';
 import { detectProjectTypes, projectCategories } from './project-types.mjs';
+import { startLanPreview } from './lan-preview.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 if (!process.env.GPM_DATA_DIR || !path.isAbsolute(process.env.GPM_DATA_DIR)) {
@@ -208,7 +209,7 @@ function snapshot() {
     const dependency = dependencyState.get(p.id);
     const installState = installJobs.has(p.id) ? 'installing' : dependency?.state || 'idle';
     const categories = projectCategories(p.classification, settings.gameEnginesOnly);
-    return { ...p, engine: categories[0], categories, dependenciesInstalled: p.dependenciesInstalled && !['installing', 'error'].includes(installState), installState, installError: dependency?.error || null, favorite: settings.favorites.includes(p.id), status: session?.status || 'idle', url: session?.url || null, error: session?.error || null, logs: installState === 'installing' || installState === 'error' ? dependency?.logs || '' : session?.logs || dependency?.logs || '', capture: captureState.get(p.id) || 'idle', preview: previews[p.id]?.time ? `/previews/${p.id}.jpg?v=${previews[p.id].time}` : null, capturedAt: previews[p.id]?.time || null, captureError: previews[p.id]?.error || null };
+    return { ...p, engine: categories[0], categories, dependenciesInstalled: p.dependenciesInstalled && !['installing', 'error'].includes(installState), installState, installError: dependency?.error || null, favorite: settings.favorites.includes(p.id), status: session?.status || 'idle', url: session?.url || null, lanUrls: session?.status === 'running' ? session.lan?.urls() || [] : [], lanError: session?.lanError || null, error: session?.error || null, logs: installState === 'installing' || installState === 'error' ? dependency?.logs || '' : session?.logs || dependency?.logs || '', capture: captureState.get(p.id) || 'idle', preview: previews[p.id]?.time ? `/previews/${p.id}.jpg?v=${previews[p.id].time}` : null, capturedAt: previews[p.id]?.time || null, captureError: previews[p.id]?.error || null };
   }) };
 }
 
@@ -225,6 +226,7 @@ async function startProject(project, owner = 'user') {
   if (session && ['starting', 'running'].includes(session.status)) {
     if (owner === 'user') session.owner = 'user';
     await session.ready;
+    await enableLanPreview(session);
     return session;
   }
   if (installJobs.has(project.id)) throw new Error('正在安装依赖，请稍候。');
@@ -241,8 +243,9 @@ async function startProject(project, owner = 'user') {
     }
     session.child.stdout.on('data', data => addLogs(session, data));
     session.child.stderr.on('data', data => addLogs(session, data));
-    session.child.on('error', error => { session.status = 'error'; session.error = error.message; });
+    session.child.on('error', error => { session.lan?.close(); session.status = 'error'; session.error = error.message; });
     session.child.on('exit', code => {
+      session.lan?.close();
       if (!['idle', 'stopping'].includes(session.status)) { session.status = 'error'; session.error = `启动进程已退出（${code}）`; }
     });
     const deadline = Date.now() + 60000;
@@ -252,7 +255,11 @@ async function startProject(project, owner = 'user') {
       if (session.url) {
         try {
           const response = await fetch(session.url, { signal: AbortSignal.timeout(2000) });
-          if (response.ok && session.status === 'starting') { session.status = 'running'; return session; }
+          if (response.ok && session.status === 'starting') {
+            session.status = 'running';
+            await enableLanPreview(session);
+            return session;
+          }
         } catch {}
       }
       await sleep(350);
@@ -265,11 +272,30 @@ async function startProject(project, owner = 'user') {
   return session.ready;
 }
 
+async function enableLanPreview(session) {
+  if (session.owner !== 'user' || session.status !== 'running' || session.lan) return;
+  if (session.lanStarting) return session.lanStarting;
+  session.lanStarting = (async () => {
+    try {
+      const preview = await startLanPreview(session.url);
+      if (session.status !== 'running') { preview.close(); return; }
+      session.lan = preview;
+      session.lanError = null;
+    } catch (error) {
+      session.lanError = `局域网预览启动失败：${error.message}`;
+    } finally { session.lanStarting = null; }
+  })();
+  return session.lanStarting;
+}
+
 async function stopProject(id) {
   const session = sessions.get(id);
   if (!session) return;
   if (session.stopping) return session.stopping;
   session.status = 'stopping';
+  session.lan?.close();
+  session.lan = null;
+  session.lanError = null;
   session.stopping = (async () => {
     await terminateChild(session.child);
     session.status = 'idle';

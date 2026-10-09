@@ -23,7 +23,7 @@ foreach ($name in @('README.md','README.zh-CN.md','LICENSE','SECURITY.md','THIRD
     Copy-Item -LiteralPath (Join-Path $workspace $name) -Destination $package
 }
 # Explicit allowlist: never copy the workspace, user's data directory, browser profiles or logs.
-foreach ($name in @('server.mjs','capture.mjs','project-types.mjs','static-server.mjs','package.json','package-lock.json')) {
+foreach ($name in @('server.mjs','capture.mjs','project-types.mjs','static-server.mjs','lan-preview.mjs','package.json','package-lock.json')) {
     Copy-Item -LiteralPath (Join-Path $workspace "runtime\$name") -Destination $runtime
 }
 $modules = Join-Path $runtime 'node_modules'

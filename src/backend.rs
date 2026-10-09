@@ -74,6 +74,10 @@ pub struct Project {
     pub favorite: bool,
     pub status: String,
     pub url: Option<String>,
+    #[serde(default)]
+    pub lan_urls: Vec<String>,
+    #[serde(default)]
+    pub lan_error: Option<String>,
     pub preview: Option<String>,
     pub captured_at: Option<u64>,
     pub capture: String,
@@ -160,6 +164,8 @@ impl Snapshot {
         for project in &mut snapshot.projects {
             project.status = "idle".into();
             project.url = None;
+            project.lan_urls.clear();
+            project.lan_error = None;
             if project.install_state == "installing" {
                 project.install_state = "error".into();
                 project.install_error = Some("上次依赖安装已中断，请重试。".into());
