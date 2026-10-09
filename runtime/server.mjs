@@ -33,6 +33,8 @@ settings.root = settings.roots[0] || '';
 settings.gameEnginesOnly = settings.gameEnginesOnly === true;
 const themeIds = new Set(['default', 'terracotta', 'rose', 'glacier', 'forest', 'olive', 'coffee', 'coast']);
 settings.theme = themeIds.has(settings.theme) ? settings.theme : 'default';
+const sortOrders = new Set(['modified', 'created', 'name']);
+settings.sortOrder = sortOrders.has(settings.sortOrder) ? settings.sortOrder : 'modified';
 let previews = await readJson(path.join(dataDir, 'previews.json'), {});
 let projects = [];
 let initialScanError = null;
@@ -361,6 +363,7 @@ const server = http.createServer(async (req, res) => {
         if (typeof data.autoCapture === 'boolean') settings.autoCapture = data.autoCapture;
         if (typeof data.gameEnginesOnly === 'boolean') settings.gameEnginesOnly = data.gameEnginesOnly;
         if (themeIds.has(data.theme)) settings.theme = data.theme;
+        if (sortOrders.has(data.sortOrder)) settings.sortOrder = data.sortOrder;
         if (data.favorite) { getProject(data.favorite); settings.favorites = settings.favorites.includes(data.favorite) ? settings.favorites.filter(id => id !== data.favorite) : [...settings.favorites, data.favorite]; }
         await saveSettings();
         return json(res, 200, snapshot());

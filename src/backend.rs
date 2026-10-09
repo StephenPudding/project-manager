@@ -30,6 +30,18 @@ pub struct Settings {
     pub game_engines_only: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default)]
+    pub sort_order: SortOrder,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SortOrder {
+    Created,
+    Name,
+    #[default]
+    #[serde(other)]
+    Modified,
 }
 
 fn default_theme() -> String {
@@ -611,6 +623,10 @@ impl Backend {
             let theme = crate::theme::find(theme).id;
             snapshot.settings.theme = theme.into();
             settings["theme"] = Value::String(theme.into());
+        }
+        if let Some(order) = value.get("sortOrder") {
+            snapshot.settings.sort_order = serde_json::from_value(order.clone())?;
+            settings["sortOrder"] = serde_json::to_value(snapshot.settings.sort_order)?;
         }
         let temporary = file.with_extension(format!("{}.tmp", std::process::id()));
         fs::write(&temporary, serde_json::to_vec_pretty(&settings)?)?;

@@ -1,5 +1,5 @@
 use crate::assets::ActionIcon;
-use crate::backend::{self, Backend, Event, Project, Request, Snapshot};
+use crate::backend::{self, Backend, Event, Project, Request, Snapshot, SortOrder};
 use crate::dev_servers::{DevServer, Discovery, Monitor};
 use crate::i18n::{self, tr};
 use crate::preview_cache::{self, PreviewCache, PreviewSource};
@@ -46,13 +46,6 @@ impl View {
             Self::Directory(root) => root_name(root),
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum SortOrder {
-    Modified,
-    Created,
-    Name,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -502,6 +495,14 @@ impl Workbench {
         cx.notify();
     }
     fn apply(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
+        if self.sort_order != snapshot.settings.sort_order {
+            self.sort_order = snapshot.settings.sort_order;
+            self.smooth_scroll.cancel();
+            self.list_state.scroll_to(ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.),
+            });
+        }
         if !self.settings_open && self.snapshot.settings.theme != snapshot.settings.theme {
             theme::apply(&snapshot.settings.theme, cx);
         }
@@ -1971,6 +1972,7 @@ impl Workbench {
                             .child(self.search_field(if width < 850. { 200. } else { 320. }))
                             .child(
                                 Button::new("sort")
+                                    .disabled(self.busy)
                                     .icon(icon(IconName::SortDescending, 18.))
                                     .ghost()
                                     .h(px(36.))
@@ -1995,15 +1997,14 @@ impl Workbench {
                                                         .checked(selected_sort == order)
                                                         .on_click(move |_, _, cx| {
                                                             let _ = view.update(cx, |this, cx| {
-                                                                this.sort_order = order;
-                                                                this.smooth_scroll.cancel();
-                                                                this.list_state.scroll_to(
-                                                                    ListOffset {
-                                                                        item_ix: 0,
-                                                                        offset_in_item: px(0.),
-                                                                    },
-                                                                );
-                                                                cx.notify();
+                                                                if this.sort_order != order {
+                                                                    this.send(
+                                                                        vec![("settings".into(), json!({"sortOrder": order}))],
+                                                                        None,
+                                                                        "",
+                                                                        cx,
+                                                                    );
+                                                                }
                                                             });
                                                         }),
                                                 );
