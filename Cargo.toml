@@ -1,0 +1,37 @@
+[package]
+name = "project-manager"
+version = "0.1.0"
+edition = "2024"
+description = "Native GPUI workbench for local projects"
+license = "MIT"
+repository = "https://github.com/StephenPudding/project-manager"
+publish = false
+
+[[bin]]
+name = "project-manager"
+path = "src/main.rs"
+
+[dependencies]
+gpui = "=0.2.2"
+gpui-component = "=0.5.1"
+gpui-component-assets = "=0.5.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2.12", features = ["json"], default-features = false }
+anyhow = "1"
+async-channel = "2.5"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+url = "2"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+sysinfo = { version = "=0.31.4", default-features = false, features = ["system"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_Diagnostics_ToolHelp"] }
+
+[profile.dev]
+debug = 0
+incremental = true
+
+[profile.release]
+opt-level = 3
+strip = true

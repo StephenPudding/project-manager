@@ -1,0 +1,76 @@
+param([string]$Version = '0.1.0')
+$ErrorActionPreference = 'Stop'
+$workspace = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$executable = Join-Path $workspace 'target\release\project-manager.exe'
+if (-not (Test-Path -LiteralPath $executable)) { throw 'Build Release first: scripts/build-native.ps1 -Release' }
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid version' }
+$distribution = Join-Path $workspace 'dist'
+New-Item -ItemType Directory -Path $distribution -Force | Out-Null
+$packageName = "project-manager-$Version-windows-x64"
+$staging = Join-Path $distribution ($packageName + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+$package = Join-Path $staging $packageName
+$runtime = Join-Path $package 'runtime'
+New-Item -ItemType Directory -Path $runtime -Force | Out-Null
+Copy-Item -LiteralPath $executable -Destination $package
+foreach ($name in @('README.md','README.zh-CN.md','LICENSE','SECURITY.md','THIRD_PARTY_NOTICES.md')) {
+    Copy-Item -LiteralPath (Join-Path $workspace $name) -Destination $package
+}
+# Explicit allowlist: never copy the workspace, user's data directory, browser profiles or logs.
+foreach ($name in @('server.mjs','capture.mjs','project-types.mjs','static-server.mjs','package.json','package-lock.json')) {
+    Copy-Item -LiteralPath (Join-Path $workspace "runtime\$name") -Destination $runtime
+}
+$modules = Join-Path $runtime 'node_modules'
+New-Item -ItemType Directory -Path $modules | Out-Null
+foreach ($name in @('playwright','playwright-core')) {
+    Copy-Item -LiteralPath (Join-Path $workspace "runtime\node_modules\$name") -Destination $modules -Recurse
+}
+$nodeSource = Split-Path -Parent (Get-Command node -ErrorAction Stop).Source
+$nodeTarget = Join-Path $runtime 'node'
+New-Item -ItemType Directory -Path (Join-Path $nodeTarget 'node_modules') -Force | Out-Null
+foreach ($name in @('node.exe','LICENSE','npm','npm.cmd','npm.ps1','npx','npx.cmd','npx.ps1')) {
+    Copy-Item -LiteralPath (Join-Path $nodeSource $name) -Destination $nodeTarget
+}
+Copy-Item -LiteralPath (Join-Path $nodeSource 'node_modules\npm') -Destination (Join-Path $nodeTarget 'node_modules') -Recurse
+
+Push-Location $workspace
+try { $browserExecutable = (& node -p 'require("./runtime/node_modules/playwright").chromium.executablePath()').Trim() }
+finally { Pop-Location }
+if ($LASTEXITCODE -ne 0) { throw 'Cannot locate Playwright Chromium' }
+$browserRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $browserExecutable))
+$browserManifest = Get-Content -LiteralPath (Join-Path $workspace 'runtime\node_modules\playwright-core\browsers.json') -Raw | ConvertFrom-Json
+$browserTarget = Join-Path $runtime 'browsers'
+New-Item -ItemType Directory -Path $browserTarget | Out-Null
+foreach ($name in @('chromium','chromium-headless-shell','ffmpeg','winldd')) {
+    $entry = $browserManifest.browsers | Where-Object { $_.name -eq $name } | Select-Object -First 1
+    $folder = $name.Replace('-','_') + '-' + $entry.revision
+    $source = Join-Path $browserRoot $folder
+    if (-not (Test-Path -LiteralPath $source)) { throw "Install the browser dependency first: $folder" }
+    Copy-Item -LiteralPath $source -Destination $browserTarget -Recurse
+}
+# Documentation's only image is our original app icon.
+New-Item -ItemType Directory -Path (Join-Path $package 'assets') | Out-Null
+Copy-Item -LiteralPath (Join-Path $workspace 'assets\app-icon.png') -Destination (Join-Path $package 'assets')
+# Carry the Rust dependencies' original license/notice texts with the portable binary.
+$cargoDirectory = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
+$registry = Join-Path $cargoDirectory 'registry\src'
+$licenseDirectory = Join-Path $package 'licenses'
+New-Item -ItemType Directory -Path $licenseDirectory | Out-Null
+$lockText = Get-Content -LiteralPath (Join-Path $workspace 'Cargo.lock') -Raw
+foreach ($dependency in [regex]::Matches($lockText, '(?m)^name = "([^"]+)"\r?\nversion = "([^"]+)"')) {
+    $crateName = $dependency.Groups[1].Value + '-' + $dependency.Groups[2].Value
+    $crate = Get-ChildItem -Path (Join-Path $registry "*\$crateName") -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $crate) { continue }
+    $texts = Get-ChildItem -LiteralPath $crate.FullName -File | Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)' }
+    if ($texts) {
+        $licenseTarget = Join-Path $licenseDirectory $crateName
+        New-Item -ItemType Directory -Path $licenseTarget | Out-Null
+        foreach ($license in $texts) { Copy-Item -LiteralPath $license.FullName -Destination $licenseTarget }
+    }
+}
+$archive = Join-Path $distribution "$packageName.zip"
+if (Test-Path -LiteralPath $archive) { throw "Archive already exists; choose a new version: $archive" }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory($staging,$archive,[System.IO.Compression.CompressionLevel]::Optimal,$false)
+$hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+[System.IO.File]::WriteAllText((Join-Path $distribution "$packageName.sha256"), "$hash  $packageName.zip`n")
+Write-Output $archive
