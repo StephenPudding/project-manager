@@ -33,7 +33,11 @@ foreach ($name in @('node.exe','LICENSE','npm','npm.cmd','npm.ps1','npx','npx.cm
 Copy-Item -LiteralPath (Join-Path $nodeSource 'node_modules\npm') -Destination (Join-Path $nodeTarget 'node_modules') -Recurse
 
 Push-Location $workspace
-try { $browserExecutable = (& node -p 'require("./runtime/node_modules/playwright").chromium.executablePath()').Trim() }
+try {
+    $browserOutput = & node -p "require('./runtime/node_modules/playwright').chromium.executablePath()"
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot locate Playwright Chromium' }
+    $browserExecutable = $browserOutput.Trim()
+}
 finally { Pop-Location }
 if ($LASTEXITCODE -ne 0) { throw 'Cannot locate Playwright Chromium' }
 $browserRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $browserExecutable))
