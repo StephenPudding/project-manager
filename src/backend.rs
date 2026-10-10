@@ -28,6 +28,8 @@ pub struct Settings {
     pub auto_capture: bool,
     #[serde(default)]
     pub game_engines_only: bool,
+    #[serde(default)]
+    pub close_to_tray: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -625,6 +627,10 @@ impl Backend {
             snapshot.settings.game_engines_only = games_only;
             settings["gameEnginesOnly"] = Value::Bool(games_only);
             snapshot.normalize_roots();
+        }
+        if let Some(close_to_tray) = value["closeToTray"].as_bool() {
+            snapshot.settings.close_to_tray = close_to_tray;
+            settings["closeToTray"] = Value::Bool(close_to_tray);
         }
         if let Some(theme) = value["theme"].as_str() {
             let theme = crate::theme::find(theme).id;

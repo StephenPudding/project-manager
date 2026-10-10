@@ -7,6 +7,8 @@ mod preview_cache;
 mod smooth_scroll;
 mod storage;
 mod theme;
+#[cfg(windows)]
+mod tray;
 mod ui;
 #[cfg(windows)]
 mod webview_capture;
@@ -35,7 +37,9 @@ fn main() {
                 KeyBinding::new("ctrl-f", FocusSearch, Some("Workbench")),
             ]);
             let cleanup = backend.clone();
-            cx.on_app_quit(move |_| {
+            cx.on_app_quit(move |_cx| {
+                #[cfg(windows)]
+                tray::shutdown(_cx);
                 cleanup.shutdown();
                 async {}
             })
@@ -59,6 +63,8 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
+                    #[cfg(windows)]
+                    tray::init(window, cx);
                     let view = cx.new(|cx| Workbench::new(backend, events, window, cx));
                     cx.new(|cx| Root::new(view, window, cx))
                 },

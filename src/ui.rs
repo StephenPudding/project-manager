@@ -60,6 +60,7 @@ enum RunningTab {
 
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsSection {
+    General,
     Appearance,
     Directories,
     Preview,
@@ -69,6 +70,7 @@ enum SettingsSection {
 impl SettingsSection {
     fn label(self) -> &'static str {
         match self {
+            Self::General => tr("常规"),
             Self::Appearance => tr("外观主题"),
             Self::Directories => tr("项目目录"),
             Self::Preview => tr("扫描与预览"),
@@ -78,6 +80,7 @@ impl SettingsSection {
 
     fn icon(self) -> IconName {
         match self {
+            Self::General => IconName::Settings2,
             Self::Appearance => IconName::Palette,
             Self::Directories => IconName::Folder,
             Self::Preview => IconName::Settings2,
@@ -164,6 +167,7 @@ pub struct Workbench {
     settings_scroll: ScrollHandle,
     auto_capture: bool,
     game_engines_only: bool,
+    close_to_tray: bool,
     draft_theme: String,
     busy: bool,
     connected: bool,
@@ -438,6 +442,27 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        #[cfg(windows)]
+        {
+            let owner = cx.entity().downgrade();
+            window.on_window_should_close(cx, move |window, cx| {
+                owner
+                    .update(cx, |this, cx| {
+                        if !this.snapshot.settings.close_to_tray {
+                            return true;
+                        }
+                        this.smooth_scroll.cancel();
+                        if let Err(error) = crate::tray::hide(window, cx) {
+                            this.message = i18n::message(&format!("{error:#}"));
+                            this.message_at = Instant::now();
+                            this.error = true;
+                            cx.notify();
+                        }
+                        false
+                    })
+                    .unwrap_or(true)
+            });
+        }
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("搜索项目、类型或端口…")));
         let directory = cx.new(|cx| InputState::new(window, cx).placeholder("E:\\projects"));
@@ -514,6 +539,7 @@ impl Workbench {
             settings_scroll: ScrollHandle::new(),
             auto_capture: true,
             game_engines_only: false,
+            close_to_tray: false,
             draft_theme: "default".into(),
             busy: false,
             connected: false,
@@ -824,6 +850,7 @@ impl Workbench {
         self.storage_error.clear();
         self.auto_capture = self.snapshot.settings.auto_capture;
         self.game_engines_only = self.snapshot.settings.game_engines_only;
+        self.close_to_tray = self.snapshot.settings.close_to_tray;
         self.draft_theme = theme::find(&self.snapshot.settings.theme).id.into();
         self.selected = None;
         self.settings_open = true;
@@ -2711,6 +2738,17 @@ impl Workbench {
             )
     }
 
+    fn settings_general(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.settings_option(
+            "close-to-tray",
+            tr("关闭窗口后保留在托盘"),
+            tr("关闭窗口时隐藏到系统托盘，项目继续运行。点击托盘图标可恢复窗口。"),
+            self.close_to_tray,
+            |this, value| this.close_to_tray = value,
+            cx,
+        )
+    }
+
     fn settings_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = self.colors();
         div()
@@ -2932,6 +2970,7 @@ impl Workbench {
             json!({
                 "autoCapture": self.auto_capture,
                 "gameEnginesOnly": self.game_engines_only,
+                "closeToTray": self.close_to_tray,
                 "theme": self.draft_theme,
             }),
         ));
@@ -2949,12 +2988,14 @@ impl Workbench {
         let navigation_width = if i18n::english() { 204. } else { 184. };
         let content_width = width - navigation_width - 2. - 64.;
         let description = match self.settings_section {
+            SettingsSection::General => tr("设置窗口关闭行为。"),
             SettingsSection::Appearance => tr("点击主题即时预览，保存后保留选择。"),
             SettingsSection::Directories => tr("管理项目来源文件夹。"),
             SettingsSection::Preview => tr("设置项目识别和画面获取方式。"),
             SettingsSection::Storage => tr("设置配置、项目列表与预览的保存位置。"),
         };
         let content = match self.settings_section {
+            SettingsSection::General => self.settings_general(cx).into_any_element(),
             SettingsSection::Appearance => self.theme_picker(content_width, cx).into_any_element(),
             SettingsSection::Directories => self.settings_directories(cx).into_any_element(),
             SettingsSection::Preview => self.settings_preview(cx).into_any_element(),
@@ -3017,6 +3058,7 @@ impl Workbench {
                             .gap_2()
                             .children(
                                 [
+                                    SettingsSection::General,
                                     SettingsSection::Appearance,
                                     SettingsSection::Directories,
                                     SettingsSection::Preview,

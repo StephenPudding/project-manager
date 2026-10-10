@@ -184,7 +184,7 @@ pub fn configure(raw: &str, source: Option<&Path>, first_run: bool) -> Result<(P
             staging.path().join("settings.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "root": "", "roots": [], "favorites": [], "autoCapture": true,
-                "gameEnginesOnly": false, "theme": "default"
+                "gameEnginesOnly": false, "closeToTray": false, "theme": "default"
             }))?,
         )?;
     }
