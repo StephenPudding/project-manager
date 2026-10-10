@@ -423,7 +423,7 @@ pub fn run() -> Result<()> {
         }
     });
     loop {
-        // Node closes stdin at the end of the queue, releasing the environment
+        // The Rust manager closes stdin at the end of the queue, releasing the environment
         // and all controllers. There is no persistent capture browser at idle.
         let line = match rx.try_recv() {
             Ok(line) => line,

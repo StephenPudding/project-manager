@@ -6,15 +6,15 @@ A native Windows app for managing local web projects, tools, and games. Browse c
 
 Starting a project also enables LAN preview. Copy its LAN link from the card or project details and open it on a device on the same network. Stopping the project closes the LAN preview too.
 
-Built with **Rust + GPUI**. Previews use the system **Microsoft Edge WebView2 Runtime**, started only for capture and closed afterward. An on-demand Node.js worker manages projects and development servers. Choose your data folder on first launch; it can be changed later in Settings. No user project screenshots or caches are included in this repository.
+Built entirely with **Rust + GPUI**, including scanning, process management, dependency installation, and LAN preview. Previews use the system **Microsoft Edge WebView2 Runtime**, started only for capture and closed afterward. Browsing cached previews runs no background service. Choose your data folder on first launch; it can be changed later in Settings.
 
 ## Download
 
-Download the Windows x64 portable ZIP from [Releases](https://github.com/StephenPudding/project-manager/releases/latest), extract the **entire archive**, and open `project-manager.exe`. New builds include Node.js but no bundled browser or Playwright. Preview capture requires [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), already present on most Windows PCs. Individual managed projects may still need their own package managers and dependencies. The interface follows your Windows display language: Chinese for Chinese systems, English otherwise.
+Download the Windows x64 portable ZIP from [Releases](https://github.com/StephenPudding/project-manager/releases/latest), extract it, and open `project-manager.exe`. Current builds do not need or bundle Node.js, Chromium, or Playwright. Preview capture requires the system [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/). Managed npm/pnpm/yarn/bun projects still need their own runtime, package manager, and dependencies; static HTML projects run directly in Rust. The interface follows your Windows display language: Chinese for Chinese systems, English otherwise.
 
 ## Build
 
-Requirements: Windows 10/11 x64, stable Rust MSVC, Visual Studio C++ Build Tools with Windows SDK, Node.js 20+, and WebView2 Runtime for previews.
+Requirements: Windows 10/11 x64, stable Rust MSVC, Visual Studio C++ Build Tools with Windows SDK, and WebView2 Runtime for previews.
 
 ```powershell
 git clone https://github.com/StephenPudding/project-manager.git
@@ -23,7 +23,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1 -Re
 .\target\release\project-manager.exe
 ```
 
-Omit `-Release` for a Debug build. The script locates the SDK's `fxc.exe` and `rc.exe`; for custom locations, set `GPUI_FXC_PATH` and `GPM_RC_PATH`. Keep source-built executables inside the checkout so they can find `runtime/`.
+Omit `-Release` for a Debug build. The script locates the SDK's `fxc.exe` and `rc.exe`; for custom locations, set `GPUI_FXC_PATH` and `GPM_RC_PATH`. The executable works outside the checkout; there is no `runtime/` folder to copy.
 
 To create a portable ZIP after building Release:
 

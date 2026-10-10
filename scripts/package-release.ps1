@@ -9,8 +9,7 @@ New-Item -ItemType Directory -Path $distribution -Force | Out-Null
 $packageName = "project-manager-$Version-windows-x64"
 $staging = Join-Path $distribution ($packageName + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
 $package = Join-Path $staging $packageName
-$runtime = Join-Path $package 'runtime'
-New-Item -ItemType Directory -Path $runtime -Force | Out-Null
+New-Item -ItemType Directory -Path $package -Force | Out-Null
 Copy-Item -LiteralPath $executable -Destination $package
 $finder = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $finder)) { throw 'Visual Studio Build Tools are required to package the redistributable C++ runtime.' }
@@ -25,17 +24,6 @@ foreach ($name in @('README.md','README.zh-CN.md','LICENSE','SECURITY.md','THIRD
     Copy-Item -LiteralPath (Join-Path $workspace $name) -Destination $package
 }
 # Explicit allowlist: never copy the workspace, user's data directory, browser profiles or logs.
-foreach ($name in @('server.mjs','capture.mjs','project-types.mjs','static-server.mjs','lan-preview.mjs','lan-addresses.mjs','package.json','package-lock.json')) {
-    Copy-Item -LiteralPath (Join-Path $workspace "runtime\$name") -Destination $runtime
-}
-$nodeSource = Split-Path -Parent (Get-Command node -ErrorAction Stop).Source
-$nodeTarget = Join-Path $runtime 'node'
-New-Item -ItemType Directory -Path (Join-Path $nodeTarget 'node_modules') -Force | Out-Null
-foreach ($name in @('node.exe','LICENSE','npm','npm.cmd','npm.ps1','npx','npx.cmd','npx.ps1')) {
-    Copy-Item -LiteralPath (Join-Path $nodeSource $name) -Destination $nodeTarget
-}
-Copy-Item -LiteralPath (Join-Path $nodeSource 'node_modules\npm') -Destination (Join-Path $nodeTarget 'node_modules') -Recurse
-
 # Documentation's only image is our original app icon.
 New-Item -ItemType Directory -Path (Join-Path $package 'assets') | Out-Null
 Copy-Item -LiteralPath (Join-Path $workspace 'assets\app-icon.png') -Destination (Join-Path $package 'assets')
