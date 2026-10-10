@@ -4,8 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
-import { chromium } from 'playwright';
-import { captureBrowserOptions, captureGame } from './capture.mjs';
+import { createCaptureWorker } from './capture.mjs';
 import { detectProjectTypes, projectCategories } from './project-types.mjs';
 import { startLanPreview } from './lan-preview.mjs';
 
@@ -58,7 +57,7 @@ function saveDependencyState() {
 const captureState = new Map();
 const queue = [];
 let working = false;
-let browser;
+let captureWorker;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const saveSettings = () => fs.writeFile(path.join(dataDir, 'settings.json'), JSON.stringify(settings, null, 2));
 const hash = input => createHash('sha256').update(input).digest('hex').slice(0, 16);
@@ -338,19 +337,18 @@ async function runQueue() {
   while (queue.length) {
     const id = queue.shift();
     captureState.set(id, 'capturing');
-    let page;
     try {
       const project = getProject(id);
       const session = await startProject(project, 'capture');
-      if (!browser?.isConnected()) browser = await chromium.launch(captureBrowserOptions);
-      page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+      captureWorker ??= createCaptureWorker();
       const file = path.join(previewDir, `${id}.jpg`);
-      await captureGame(page, session.url, file);
+      await captureWorker.capture(session.url, file);
       previews[id] = { time: Date.now(), error: null };
     } catch (error) {
       previews[id] = { ...previews[id], error: error.message };
+      await captureWorker?.close().catch(() => {});
+      captureWorker = null;
     } finally {
-      await page?.close().catch(() => {});
       try {
         if (sessions.get(id)?.owner === 'capture') await stopProject(id);
       } catch (error) {
@@ -362,8 +360,8 @@ async function runQueue() {
       captureState.set(id, previews[id]?.error ? 'error' : 'done');
     }
   }
-  await browser?.close().catch(() => {});
-  browser = null;
+  await captureWorker?.close().catch(() => {});
+  captureWorker = null;
   working = false;
   if (queue.length) void runQueue();
 }
@@ -444,7 +442,7 @@ async function shutdown() {
     await terminateChild(job.child);
     await job.done;
   }));
-  await browser?.close().catch(() => {});
+  await captureWorker?.close().catch(() => {});
   server.close();
   process.exit(0);
 }

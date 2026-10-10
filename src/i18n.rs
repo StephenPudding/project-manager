@@ -50,6 +50,7 @@ pub fn message(value: &str) -> String {
         "本地服务未能就绪，请查看 {value}",
         "无法复制 {value}",
         "启动进程已退出（{value}）",
+        "WebView2 截图进程已退出（{value}）",
     ] {
         let (prefix, suffix) = template.split_once("{value}").unwrap();
         if let Some(detail) = value

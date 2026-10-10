@@ -24,3 +24,4 @@ screenshots/
 *.exe
 /dist/
 /.local/
+webview2/

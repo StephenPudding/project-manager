@@ -8,10 +8,20 @@ mod smooth_scroll;
 mod storage;
 mod theme;
 mod ui;
+#[cfg(windows)]
+mod webview_capture;
 use gpui::*;
 use gpui_component::{Root, Theme, ThemeMode};
 use ui::{CloseOverlay, FocusSearch, Workbench};
 fn main() {
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--capture-webview2")) {
+        if let Err(error) = webview_capture::run() {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let (backend, events) = backend::Backend::start();
     Application::new()
         .with_assets(assets::Assets)

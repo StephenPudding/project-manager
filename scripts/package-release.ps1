@@ -18,18 +18,15 @@ $visualStudio = & $finder -latest -products '*' -property installationPath
 $crt = Get-ChildItem -Path (Join-Path $visualStudio 'VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT\vcruntime140.dll') |
     Sort-Object FullName -Descending | Select-Object -First 1
 if (-not $crt) { throw 'Visual C++ redistributable runtime was not found.' }
-Copy-Item -LiteralPath $crt.FullName -Destination $package
+foreach ($name in @('vcruntime140.dll', 'vcruntime140_1.dll')) {
+    Copy-Item -LiteralPath (Join-Path $crt.DirectoryName $name) -Destination $package
+}
 foreach ($name in @('README.md','README.zh-CN.md','LICENSE','SECURITY.md','THIRD_PARTY_NOTICES.md')) {
     Copy-Item -LiteralPath (Join-Path $workspace $name) -Destination $package
 }
 # Explicit allowlist: never copy the workspace, user's data directory, browser profiles or logs.
 foreach ($name in @('server.mjs','capture.mjs','project-types.mjs','static-server.mjs','lan-preview.mjs','lan-addresses.mjs','package.json','package-lock.json')) {
     Copy-Item -LiteralPath (Join-Path $workspace "runtime\$name") -Destination $runtime
-}
-$modules = Join-Path $runtime 'node_modules'
-New-Item -ItemType Directory -Path $modules | Out-Null
-foreach ($name in @('playwright','playwright-core')) {
-    Copy-Item -LiteralPath (Join-Path $workspace "runtime\node_modules\$name") -Destination $modules -Recurse
 }
 $nodeSource = Split-Path -Parent (Get-Command node -ErrorAction Stop).Source
 $nodeTarget = Join-Path $runtime 'node'
@@ -39,25 +36,6 @@ foreach ($name in @('node.exe','LICENSE','npm','npm.cmd','npm.ps1','npx','npx.cm
 }
 Copy-Item -LiteralPath (Join-Path $nodeSource 'node_modules\npm') -Destination (Join-Path $nodeTarget 'node_modules') -Recurse
 
-Push-Location $workspace
-try {
-    $browserOutput = & node -p "require('./runtime/node_modules/playwright').chromium.executablePath()"
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot locate Playwright Chromium' }
-    $browserExecutable = $browserOutput.Trim()
-}
-finally { Pop-Location }
-if ($LASTEXITCODE -ne 0) { throw 'Cannot locate Playwright Chromium' }
-$browserRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $browserExecutable))
-$browserManifest = Get-Content -LiteralPath (Join-Path $workspace 'runtime\node_modules\playwright-core\browsers.json') -Raw | ConvertFrom-Json
-$browserTarget = Join-Path $runtime 'browsers'
-New-Item -ItemType Directory -Path $browserTarget | Out-Null
-foreach ($name in @('chromium','chromium-headless-shell','ffmpeg','winldd')) {
-    $entry = $browserManifest.browsers | Where-Object { $_.name -eq $name } | Select-Object -First 1
-    $folder = $name.Replace('-','_') + '-' + $entry.revision
-    $source = Join-Path $browserRoot $folder
-    if (-not (Test-Path -LiteralPath $source)) { throw "Install the browser dependency first: $folder" }
-    Copy-Item -LiteralPath $source -Destination $browserTarget -Recurse
-}
 # Documentation's only image is our original app icon.
 New-Item -ItemType Directory -Path (Join-Path $package 'assets') | Out-Null
 Copy-Item -LiteralPath (Join-Path $workspace 'assets\app-icon.png') -Destination (Join-Path $package 'assets')
@@ -66,6 +44,9 @@ $cargoDirectory = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env
 $registry = Join-Path $cargoDirectory 'registry\src'
 $licenseDirectory = Join-Path $package 'licenses'
 New-Item -ItemType Directory -Path $licenseDirectory | Out-Null
+foreach ($notice in @('WebView2-SDK-LICENSE.txt', 'webview2-rs-LICENSE.txt')) {
+    Copy-Item -LiteralPath (Join-Path $workspace "third_party\$notice") -Destination $licenseDirectory
+}
 $lockText = Get-Content -LiteralPath (Join-Path $workspace 'Cargo.lock') -Raw
 foreach ($dependency in [regex]::Matches($lockText, '(?m)^name = "([^"]+)"\r?\nversion = "([^"]+)"')) {
     $crateName = $dependency.Groups[1].Value + '-' + $dependency.Groups[2].Value
@@ -78,7 +59,7 @@ foreach ($dependency in [regex]::Matches($lockText, '(?m)^name = "([^"]+)"\r?\nv
         foreach ($license in $texts) { Copy-Item -LiteralPath $license.FullName -Destination $licenseTarget }
     }
 }
-# Installed browsers can accumulate diagnostic logs; never distribute those files.
+# Never distribute diagnostic logs from runtime dependencies.
 foreach ($diagnostic in @(Get-ChildItem -LiteralPath $package -File -Recurse -Filter '*.log')) {
     $diagnosticPath = [System.IO.Path]::GetFullPath($diagnostic.FullName)
     if (-not $diagnosticPath.StartsWith($package + '\',[System.StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected diagnostic path' }

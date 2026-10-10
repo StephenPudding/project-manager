@@ -2,7 +2,7 @@
 
 Use an issue to describe a bug or discuss a substantial feature before starting work. Small fixes and documentation improvements are welcome.
 
-Follow the README to build. Format Rust changes with `cargo fmt`, and describe the behavior and any build or validation results in your pull request. Say explicitly when tests were not run. Existing tests are opt-in and can launch temporary servers and Chromium; they do not run as part of the normal build.
+Follow the README to build. Format Rust changes with `cargo fmt`, and describe the behavior and any build or validation results in your pull request. Say explicitly when tests were not run. Existing tests are opt-in and can launch temporary servers and WebView2; they do not run as part of the normal build.
 
 Keep slow work outside the UI thread, preserve cached browsing without an idle worker, and never terminate processes the manager does not own. Update both READMEs when build instructions change.
 

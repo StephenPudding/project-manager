@@ -457,9 +457,6 @@ impl Backend {
     fn connect(&self) -> Result<String> {
         // A private worker can be released when idle, without terminating a user's web workbench.
         let root = self.root.as_path();
-        if !root.join("runtime/node_modules/playwright").is_dir() {
-            bail!("请在 runtime 目录运行 npm ci，再运行 npx playwright install chromium。");
-        }
         let log_dir = self.data_dir.as_path();
         fs::create_dir_all(&log_dir)?;
         let log = fs::File::create(log_dir.join("native-service.log"))?;
@@ -473,12 +470,19 @@ impl Backend {
         } else {
             PathBuf::from("node")
         };
+        // Cargo's test harness cannot enter the native capture helper's main().
+        let capture_executable = if cfg!(test) {
+            root.join("target/release/project-manager.exe")
+        } else {
+            std::env::current_exe()?
+        };
         let mut command = Command::new(executable);
         command
             .arg(root.join("runtime/server.mjs"))
             .current_dir(root)
             .env("PORT", "0")
             .env("GPM_DATA_DIR", self.data_dir.as_path())
+            .env("GPM_EXECUTABLE", capture_executable)
             .stdout(Stdio::piped())
             .stderr(log);
         if bundled_node.is_file() {
@@ -487,9 +491,6 @@ impl Backend {
                 paths.extend(std::env::split_paths(&path));
             }
             command.env("PATH", std::env::join_paths(paths)?);
-        }
-        if root.join("runtime/browsers").is_dir() {
-            command.env("PLAYWRIGHT_BROWSERS_PATH", root.join("runtime/browsers"));
         }
         let mut child = hidden(&mut command)
             .spawn()

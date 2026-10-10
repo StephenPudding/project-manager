@@ -1,64 +1,69 @@
-// Use the installed graphics driver. SwiftShader would render the game on the CPU.
-export const captureBrowserOptions = {
-  headless: true,
-  args: ['--enable-webgl', '--use-angle=default'],
-};
+import { spawn, execFile } from 'node:child_process';
+import { createInterface } from 'node:readline';
 
-export async function prepareCapture(page) {
-  await page.addInitScript(() => {
-    const undo = [];
-    const observe = (prototype, names) => {
-      if (!prototype) return;
-      for (const name of names) {
-        const original = prototype[name];
-        if (typeof original !== 'function') continue;
-        prototype[name] = function (...args) {
-          const result = original.apply(this, args);
-          if (this.canvas?.width * this.canvas?.height > 10000) {
-            window.__gpmPreviewPaintedAt = performance.now();
-            // Remove instrumentation immediately after the first real game draw.
-            for (const restore of undo) restore();
+// The native executable hosts WebView2 in a short-lived STA process. No browser
+// downloads, Playwright dependency, or HTTP screenshot control endpoint.
+export function createCaptureWorker() {
+  const executable = process.env.GPM_EXECUTABLE;
+  if (!executable) throw new Error('请从 Project Manager 启动预览截图。');
+  const child = spawn(executable, ['--capture-webview2'], {
+    windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: process.env,
+  });
+  let pending;
+  let failure;
+  let diagnostic = '';
+  let closed = false;
+  let closing;
+  let resolveExit;
+  const exited = new Promise(resolve => { resolveExit = resolve; });
+  const fail = error => { failure = error; pending?.reject(error); };
+  child.stderr.on('data', data => { diagnostic = (diagnostic + data).slice(-16000); });
+  child.on('error', error => fail(error));
+  child.stdin.on('error', error => fail(error));
+  child.on('close', code => {
+    closed = true;
+    if (pending) fail(new Error(diagnostic.trim() || `WebView2 截图进程已退出（${code}）`));
+    resolveExit();
+  });
+  const lines = createInterface({ input: child.stdout });
+  lines.on('line', line => {
+    if (!pending) return;
+    try {
+      const result = JSON.parse(line);
+      if (result.ok) pending.resolve(result.duration);
+      else pending.reject(new Error(result.error || 'WebView2 截图失败'));
+    } catch (error) { fail(error); }
+  });
+  return {
+    async capture(url, file) {
+      if (failure) throw failure;
+      if (closed) throw new Error(diagnostic.trim() || 'WebView2 截图进程已关闭');
+      if (pending) throw new Error('WebView2 正在获取画面');
+      let timer;
+      try {
+        return await new Promise((resolve, reject) => {
+          pending = { resolve, reject };
+          timer = setTimeout(() => fail(new Error('WebView2 获取画面超时')), 100000);
+          child.stdin.write(`${JSON.stringify({ url, file })}\n`, error => { if (error) fail(error); });
+        });
+      } finally { clearTimeout(timer); pending = null; }
+    },
+    close() {
+      if (closing) return closing;
+      closing = (async () => {
+        if (!closed) {
+          child.stdin.end();
+          let timer;
+          await Promise.race([exited, new Promise(resolve => { timer = setTimeout(resolve, 8000); })]);
+          clearTimeout(timer);
+          if (!closed && child.pid) {
+            await new Promise(resolve => execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'],
+              { windowsHide: true }, resolve));
           }
-          return result;
-        };
-        undo.push(() => { prototype[name] = original; });
-      }
-    };
-    observe(window.CanvasRenderingContext2D?.prototype,
-      ['drawImage', 'fill', 'fillRect', 'fillText', 'stroke', 'strokeRect', 'strokeText', 'putImageData']);
-    observe(window.WebGLRenderingContext?.prototype, ['drawArrays', 'drawElements']);
-    observe(window.WebGL2RenderingContext?.prototype,
-      ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced']);
-  });
-}
-
-export async function captureGame(page, url, file) {
-  const started = Date.now();
-  await prepareCapture(page);
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  // Resource quietness is bounded: analytics or polling must not stall a preview forever.
-  await Promise.all([
-    page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {}),
-    page.waitForFunction(() => {
-      const canvases = [...document.querySelectorAll('canvas')];
-      const gameCanvas = canvases.some(canvas => canvas.width * canvas.height > 10000);
-      return gameCanvas ? !!window.__gpmPreviewPaintedAt : document.readyState === 'complete';
-    }, { }, { timeout: 6000 }).catch(() => {}),
-  ]);
-  // Give the frame containing the draw a chance to reach the compositor.
-  await page.evaluate(() => new Promise(resolve => {
-    const fallback = setTimeout(resolve, 250);
-    requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(fallback); resolve(); }));
-  }));
-  const clip = await page.evaluate(() => {
-    return [...document.querySelectorAll('canvas')].map(canvas => {
-      const box = canvas.getBoundingClientRect();
-      const x = Math.max(0, box.x), y = Math.max(0, box.y);
-      return { x, y, width: Math.max(0, Math.min(innerWidth, box.right) - x), height: Math.max(0, Math.min(innerHeight, box.bottom) - y) };
-    }).filter(box => box.width * box.height > 10000)
-      .sort((a, b) => b.width * b.height - a.width * a.height)[0];
-  });
-  // A viewport clip does not wait for an animated canvas to become motionless.
-  await page.screenshot({ path: file, type: 'jpeg', quality: 85, ...(clip ? { clip } : {}), timeout: 10000 });
-  return Date.now() - started;
+        }
+        lines.close();
+      })();
+      return closing;
+    },
+  };
 }
