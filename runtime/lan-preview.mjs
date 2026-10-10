@@ -1,16 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
-import { networkInterfaces } from 'node:os';
-
-function addresses() {
-  const interfaces = Object.entries(networkInterfaces());
-  // Prefer physical adapters while still allowing VPN/virtual network links.
-  interfaces.sort(([a], [b]) => Number(/virtual|vethernet|wsl|docker|vmware|tailscale|zerotier/i.test(a))
-    - Number(/virtual|vethernet|wsl|docker|vmware|tailscale|zerotier/i.test(b)));
-  return [...new Set(interfaces.flatMap(([, entries]) => (entries || [])
-    .filter(entry => !entry.internal && entry.family === 'IPv4' && !entry.address.startsWith('169.254.'))
-    .map(entry => entry.address)))];
-}
+import { activeLanAddresses, lanAddresses } from './lan-addresses.mjs';
 
 // Relay to the existing server so custom npm scripts need no host flags or edits.
 // HTTP streams and WebSocket upgrades both stay attached to this project's lifecycle.
@@ -24,8 +14,9 @@ export async function startLanPreview(localUrl) {
   const agent = new transport.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 4 });
   const sockets = new Set();
   let closed = false;
-  let networkAddresses = addresses();
+  let networkAddresses = await lanAddresses();
   let checkedAt = Date.now();
+  let refreshing = false;
   const track = socket => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
@@ -106,8 +97,14 @@ export async function startLanPreview(localUrl) {
   return {
     urls() {
       if (closed) return [];
-      if (Date.now() - checkedAt > 5000) { networkAddresses = addresses(); checkedAt = Date.now(); }
-      return networkAddresses.map(address => `http://${address}:${port}${target.pathname}${target.search}${target.hash}`);
+      if (!refreshing && Date.now() - checkedAt > 5000) {
+        refreshing = true;
+        checkedAt = Date.now();
+        void lanAddresses().then(addresses => { if (!closed) networkAddresses = addresses; })
+          .catch(() => {}).finally(() => { refreshing = false; });
+      }
+      return activeLanAddresses(networkAddresses)
+        .map(address => `http://${address}:${port}${target.pathname}${target.search}${target.hash}`);
     },
     close,
   };
