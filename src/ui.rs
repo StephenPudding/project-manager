@@ -1,6 +1,6 @@
 use crate::assets::ActionIcon;
 use crate::backend::{self, Backend, Event, Project, Request, Snapshot, SortOrder};
-use crate::dev_servers::{DevServer, Discovery, Monitor};
+use crate::dev_servers::{self, DevServer, Discovery, Monitor};
 use crate::i18n::{self, tr};
 use crate::preview_cache::{self, PreviewCache, PreviewSource};
 use crate::smooth_scroll::SmoothScroll;
@@ -17,7 +17,10 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 use serde_json::json;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 const TITLE_BAR_HEIGHT: f32 = 40.;
 actions!(workbench, [CloseOverlay, FocusSearch]);
@@ -133,6 +136,7 @@ pub struct Workbench {
     monitor: Monitor,
     discovery: Discovery,
     discovering: bool,
+    stopping_servers: HashSet<(u32, u64)>,
     running_tab: RunningTab,
     snapshot: Snapshot,
     previews: PreviewCache,
@@ -482,6 +486,7 @@ impl Workbench {
             monitor,
             discovery: Discovery::default(),
             discovering: false,
+            stopping_servers: HashSet::new(),
             running_tab: RunningTab::All,
             snapshot: Snapshot::default(),
             previews: PreviewCache::default(),
@@ -753,6 +758,61 @@ impl Workbench {
             _ => return,
         };
         self.send(vec![(endpoint, value)], launch, message, cx);
+    }
+
+    fn stop_running(&mut self, entry: &RunningEntry, cx: &mut Context<Self>) {
+        if entry.owned {
+            if let Some(project) = &entry.project {
+                self.action(project, "stop", cx);
+            }
+            return;
+        }
+        let identity = (entry.server.pid, entry.server.started);
+        if self.busy || !self.stopping_servers.insert(identity) {
+            return;
+        }
+        self.error = false;
+        self.message = tr("正在停止").into();
+        self.message_at = Instant::now();
+        let server = entry.server.clone();
+        let stop = cx
+            .background_executor()
+            .spawn(async move { dev_servers::stop(&server) });
+        cx.spawn(async move |this, cx| {
+            let result = stop.await;
+            let _ = this.update(cx, |this, cx| {
+                this.stopping_servers.remove(&identity);
+                match result {
+                    Ok(()) => {
+                        this.discovery
+                            .servers
+                            .retain(|server| (server.pid, server.started) != identity);
+                        this.error = false;
+                        this.message = tr("项目已停止").into();
+                    }
+                    Err(error) => {
+                        this.error = true;
+                        this.message = format!("{}: {error:#}", tr("无法停止外部开发服务"));
+                    }
+                }
+                this.message_at = Instant::now();
+                this.discovering = true;
+                this.monitor.refresh();
+                let stamp = this.message_at;
+                this.toast_timer = Some(cx.spawn(async move |this, cx| {
+                    Timer::after(Duration::from_secs(5)).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.message_at == stamp && !this.busy && !this.error {
+                            this.message.clear();
+                            cx.notify();
+                        }
+                    });
+                }));
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
     fn settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.smooth_scroll.cancel();
@@ -1738,6 +1798,10 @@ impl Workbench {
         let id = entry.key();
         let url = entry.server.url.clone();
         let directory = entry.server.directory.clone();
+        let stopping = self
+            .stopping_servers
+            .contains(&(entry.server.pid, entry.server.started));
+        let stop_entry = entry.clone();
         let lan_address = entry
             .project
             .as_ref()
@@ -1891,11 +1955,15 @@ impl Workbench {
                                 }),
                         )
                     })
-                    .when_some(entry.project.filter(|_| entry.owned), |s, project| {
+                    .when(entry.owned || entry.server.pid != 0, |s| {
                         s.child(
                             button(
                                 SharedString::from(format!("{id}-stop")),
-                                tr("停止"),
+                                if stopping {
+                                    tr("正在停止")
+                                } else {
+                                    tr("停止")
+                                },
                                 IconName::Close,
                             )
                             .h(px(36.))
@@ -1905,10 +1973,15 @@ impl Workbench {
                             .border_color(rgb(0xe8c9c2))
                             .bg(rgb(0xf9ece8))
                             .text_color(rgb(0xa34b3e))
-                            .disabled(self.busy)
+                            .disabled(
+                                self.busy
+                                    || stopping
+                                    || (!entry.owned && entry.server.started == 0),
+                            )
+                            .tooltip(tr("停止运行此项目"))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| {
-                                    this.action(&project, "stop", cx)
+                                    this.stop_running(&stop_entry, cx)
                                 }),
                             ),
                         )

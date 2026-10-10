@@ -9,6 +9,7 @@ pub struct DevServer {
     pub name: String,
     pub directory: Option<String>,
     pub kind: String,
+    // Exact Windows creation time distinguishes a discovered process from a reused PID.
     pub started: u64,
 }
 
@@ -101,6 +102,18 @@ impl Drop for Monitor {
     }
 }
 
+pub fn stop(server: &DevServer) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        windows::stop(server)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = server;
+        anyhow::bail!(crate::i18n::tr("停止外部开发服务目前仅支持 Windows。"))
+    }
+}
+
 #[cfg(not(windows))]
 fn discover(_: &std::path::Path) -> Discovery {
     Discovery {
@@ -128,22 +141,100 @@ mod windows {
         collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         mem::{offset_of, size_of},
         net::{Ipv4Addr, Ipv6Addr},
+        os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
         path::Path,
         ptr,
     };
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, INVALID_HANDLE_VALUE},
+        Foundation::{
+            CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, FILETIME, HANDLE,
+            INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        },
         NetworkManagement::IpHelper::{
             GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID,
             MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
         },
         Networking::WinSock::{AF_INET, AF_INET6},
-        System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-            TH32CS_SNAPPROCESS,
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+            },
         },
     };
+
+    fn creation_time(handle: HANDLE) -> Result<u64> {
+        let mut created = FILETIME::default();
+        let mut exited = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        if unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) }
+            == 0
+        {
+            return Err(std::io::Error::last_os_error())
+                .context(crate::i18n::tr("无法读取开发进程身份"));
+        }
+        Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+    }
+
+    fn process_identity(pid: u32) -> Result<u64> {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error())
+                .context(crate::i18n::tr("无法读取开发进程身份"));
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        creation_time(handle.as_raw_handle())
+    }
+
+    pub fn stop(server: &DevServer) -> Result<()> {
+        if server.pid == 0 || server.pid == std::process::id() || server.started == 0 {
+            bail!(crate::i18n::tr("无法确认开发进程身份，请刷新端口后重试。"));
+        }
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+                0,
+                server.pid,
+            )
+        };
+        if handle.is_null() {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+                return Ok(()); // The process has already exited.
+            }
+            return Err(error).context(crate::i18n::tr("无法停止外部开发服务"));
+        }
+        let process = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let handle = process.as_raw_handle();
+        if unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        if creation_time(handle)? != server.started {
+            bail!(crate::i18n::tr("进程已变化，请刷新端口后重试。"));
+        }
+        if !listeners()?.0.contains_key(&(server.pid, server.port)) {
+            return Ok(()); // This server is no longer listening; leave the process alone.
+        }
+        // Use the validated handle directly; never stop a terminal, launcher or another PID.
+        if unsafe { TerminateProcess(handle, 1) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if unsafe { WaitForSingleObject(handle, 0) } != WAIT_OBJECT_0 {
+                return Err(error).context(crate::i18n::tr("无法停止外部开发服务"));
+            }
+        }
+        match unsafe { WaitForSingleObject(handle, 5000) } {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => bail!(crate::i18n::tr("开发进程未退出，请刷新后重试。")),
+            _ => Err(std::io::Error::last_os_error())
+                .context(crate::i18n::tr("等待开发进程退出失败")),
+        }
+    }
 
     struct ProcessEntry {
         parent: u32,
@@ -478,7 +569,7 @@ mod windows {
                 name,
                 directory,
                 kind,
-                started: process.start_time(),
+                started: process_identity(pid).unwrap_or_default(),
             });
         }
         if unreadable {
