@@ -402,7 +402,11 @@ const server = http.createServer(async (req, res) => {
       if (match) {
         const project = getProject(match[1]);
         if (match[2] === 'install') await installDependencies(project);
-        if (match[2] === 'start') await startProject(project);
+        if (match[2] === 'start') {
+          await startProject(project);
+          // Refresh in the background after a manual launch, including existing cached previews.
+          enqueue(project.id, true);
+        }
         if (match[2] === 'stop') await stopProject(project.id);
         if (match[2] === 'capture') enqueue(project.id, true);
         if (match[2] === 'folder') {

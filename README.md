@@ -4,7 +4,7 @@
 
 A native Windows app for managing local web projects, tools, and games. Browse cached previews, organize multiple project folders, install dependencies, start or stop development servers, and inspect errors from one workspace.
 
-Starting a project also enables LAN preview. Copy its LAN link from the card or project details and open it on a device on the same network. Stopping the project closes the LAN preview too.
+Starting a project refreshes its cached preview in the background and enables LAN preview. Copy its LAN link from the card or project details and open it on a device on the same network. Stopping the project closes the LAN preview too.
 
 Built with **Rust + GPUI**. Previews use the system **Microsoft Edge WebView2 Runtime**, started only for capture and closed afterward. An on-demand Node.js worker manages projects and development servers. Choose your data folder on first launch; it can be changed later in Settings. No user project screenshots or caches are included in this repository.
 
