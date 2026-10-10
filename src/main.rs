@@ -1,14 +1,9 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod assets;
 mod backend;
-mod capture_worker;
 mod dev_servers;
 mod i18n;
-mod managed_process;
 mod preview_cache;
-mod project_network;
-mod project_scan;
-mod project_service;
 mod smooth_scroll;
 mod storage;
 mod theme;

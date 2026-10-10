@@ -364,7 +364,13 @@ mod windows {
         None
     }
 
-    pub fn discover(_: &Path) -> Result<Discovery> {
+    fn path_key(path: &str) -> String {
+        path.replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    }
+
+    pub fn discover(workspace: &Path) -> Result<Discovery> {
         let (listeners, mut warning) = listeners()?;
         let processes = processes()?;
         let mut chains = HashMap::new();
@@ -393,6 +399,7 @@ mod windows {
                 .with_cmd(UpdateKind::Always)
                 .with_cwd(UpdateKind::Always),
         );
+        let excluded = path_key(&workspace.join("runtime/server.mjs").to_string_lossy());
         let mut servers = Vec::new();
         let mut unreadable = false;
         for ((pid, port), addresses) in listeners {
@@ -402,6 +409,13 @@ mod windows {
             let Some(process) = system.process(Pid::from_u32(pid)) else {
                 continue;
             };
+            if process
+                .cmd()
+                .iter()
+                .any(|arg| path_key(&arg.to_string_lossy()) == excluded)
+            {
+                continue;
+            }
             // Parent PIDs can be reused; a parent newer than the listener is not its launcher.
             let relatives: Vec<_> = chain
                 .iter()
